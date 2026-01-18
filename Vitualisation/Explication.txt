@@ -1,0 +1,53 @@
+### 📁 Fichiers fournis
+
+| Fichier | Description |
+|---------|-------------|
+| **`types.ts`** | Types mis à jour avec `PaginationMode = 'page' \| 'infinite' \| 'virtualized'` et `VirtualizationConfig` |
+| **`VirtualizedTableBody.tsx`** | Nouveau composant qui gère le rendu virtualisé avec `@tanstack/react-virtual` |
+| **`DataTable.tsx`** | Version complète intégrant le mode virtualisé |
+| **`index.ts`** | Exports mis à jour |
+| **`USAGE.md`** | Documentation complète d'utilisation |
+
+### 🚀 Pour intégrer dans ton projet
+
+1. **Remplace** les fichiers dans `frontend/src/components/ui/DataTable/` :
+   - `types.ts`
+   - `DataTable.tsx`
+   - `index.ts`
+
+2. **Ajoute** le nouveau composant :
+   - `VirtualizedTableBody.tsx`
+
+3. **Utilise** le nouveau mode :
+
+```tsx
+<DataTable<Personnage>
+  title="Personnages"
+  endpoint="/personnage"
+  queryKey={['personnages']}
+  columns={columns}
+  paginationMode="virtualized"  // ← Nouveau mode !
+  virtualizationConfig={{
+    rowHeight: 48,      // Hauteur de tes lignes
+    overscan: 5,        // Lignes pré-rendues
+    scrollThreshold: 10 // Seuil de chargement
+  }}
+  fixedHeight={600}
+  maxInfiniteItems={5000}
+/>
+```
+
+### ⚠️ Points d'attention
+
+1. **Hauteur de ligne** : Mesure la hauteur exacte de tes lignes avec les DevTools et configure `rowHeight` en conséquence
+
+2. **TanStack Virtual** : Tu l'as déjà installé (`@tanstack/react-virtual@3.13.12`), donc pas d'installation supplémentaire
+
+3. **Compatibilité** : Les modes `page` et `infinite` existants ne sont pas modifiés, donc aucune régression
+
+### 🔧 Prochaines étapes possibles
+
+Si tu le souhaites, on pourrait également implémenter :
+- **Détection automatique** : Basculer automatiquement vers le mode virtualisé au-delà d'un seuil configurable
+- **Lignes à hauteur variable** : Support via `measureElement` (plus complexe)
+- **Scroll horizontal virtualisé** : Pour les tableaux avec beaucoup de colonnes
