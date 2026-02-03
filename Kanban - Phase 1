@@ -1,0 +1,562 @@
+Excellent état d'esprit ! 👍 Créer un composant Kanban générique réutilisable est exactement la bonne approche. On pourra ensuite l'instancier pour les Romans, les Personnages, les Événements, etc.
+
+---
+
+## 🚀 Phase 1 : Fondations
+
+### Étape 1.1 : Installation des dépendances
+
+Commençons par installer `@dnd-kit` et ses modules nécessaires :
+
+```bash
+npm install @dnd-kit/core @dnd-kit/sortable @dnd-kit/utilities
+```
+
+**Explication des packages :**
+- `@dnd-kit/core` : Le cœur du système de drag & drop (contextes, sensors, events)
+- `@dnd-kit/sortable` : Extension pour les listes triables (ce qu'on utilise dans chaque colonne)
+- `@dnd-kit/utilities` : Utilitaires CSS pour les transformations pendant le drag
+
+---
+
+### Étape 1.2 : Types TypeScript génériques
+
+Avant de coder les composants, définissons les types qui rendront notre Kanban vraiment générique.
+
+Je te propose de créer un fichier `/types/kanban.ts` :
+
+```typescript
+/**
+ * Types TypeScript pour le système Kanban générique
+ * Permet de créer des vues Kanban pour n'importe quelle entité
+ * @module KanbanTypes
+ */
+
+import { BaseEntity } from './api'
+
+// ============================================================================
+// CONFIGURATION DU KANBAN
+// ============================================================================
+
+/**
+ * Configuration d'une colonne du Kanban
+ * Chaque colonne représente une valeur possible du champ de groupement
+ */
+export interface KanbanColumnConfig {
+  /** Identifiant unique de la colonne (valeur du champ de groupement) */
+  id: string
+  
+  /** Titre affiché en en-tête de colonne */
+  title: string
+  
+  /** Couleur optionnelle pour distinguer visuellement les colonnes */
+  color?: string
+}
+
+/**
+ * Configuration d'un champ à afficher sur les cartes
+ */
+export interface KanbanCardFieldConfig {
+  /** Clé du champ dans l'entité (ex: 'nom', 'resume', 'monde.nom') */
+  key: string
+  
+  /** Label affiché (optionnel, sinon on utilise la clé) */
+  label?: string
+  
+  /** Type d'affichage du champ */
+  type: 'text' | 'badge' | 'date' | 'relation'
+  
+  /** Tronquer le texte après N caractères (pour les résumés) */
+  truncate?: number
+}
+
+/**
+ * Configuration complète du Kanban
+ * Définit comment les données sont groupées et affichées
+ */
+export interface KanbanConfig<T extends BaseEntity> {
+  /** 
+   * Clé du champ utilisé pour grouper les entités en colonnes
+   * Ex: 'statut', 'type', 'monde.nom'
+   */
+  groupByField: keyof T | string
+  
+  /** 
+   * Champ utilisé comme titre principal de la carte
+   * Ex: 'nom', 'titre'
+   */
+  cardTitleField: keyof T | string
+  
+  /** 
+   * Champs supplémentaires à afficher sur les cartes
+   */
+  cardFields: KanbanCardFieldConfig[]
+  
+  /** 
+   * Configuration des colonnes (ordre, couleurs, titres personnalisés)
+   * Si non fourni, les colonnes sont générées automatiquement depuis les données
+   */
+  columns?: KanbanColumnConfig[]
+  
+  /**
+   * Valeur à utiliser pour les entités sans valeur dans le champ de groupement
+   * Ex: "Non défini", "Sans statut"
+   */
+  emptyColumnTitle?: string
+}
+
+// ============================================================================
+// DONNÉES DU KANBAN
+// ============================================================================
+
+/**
+ * Une colonne du Kanban avec ses items
+ */
+export interface KanbanColumn<T extends BaseEntity> {
+  /** Identifiant unique (valeur du champ de groupement) */
+  id: string
+  
+  /** Titre de la colonne */
+  title: string
+  
+  /** Couleur de la colonne */
+  color?: string
+  
+  /** Items dans cette colonne */
+  items: T[]
+  
+  /** Nombre total d'items (peut différer de items.length avec pagination) */
+  totalCount: number
+  
+  /** Indique s'il y a plus d'items à charger */
+  hasMore: boolean
+}
+
+/**
+ * État complet du Kanban
+ */
+export interface KanbanState<T extends BaseEntity> {
+  /** Toutes les colonnes avec leurs items */
+  columns: KanbanColumn<T>[]
+  
+  /** Configuration actuelle */
+  config: KanbanConfig<T>
+  
+  /** État de chargement global */
+  isLoading: boolean
+  
+  /** Erreur éventuelle */
+  error: Error | null
+}
+
+// ============================================================================
+// ÉVÉNEMENTS DU KANBAN
+// ============================================================================
+
+/**
+ * Données d'un événement de déplacement d'item
+ */
+export interface KanbanMoveEvent<T extends BaseEntity> {
+  /** L'item qui a été déplacé */
+  item: T
+  
+  /** ID de la colonne source */
+  sourceColumnId: string
+  
+  /** ID de la colonne destination */
+  destinationColumnId: string
+  
+  /** Nouvel index dans la colonne destination */
+  newIndex: number
+}
+
+// ============================================================================
+// PROPS DES COMPOSANTS
+// ============================================================================
+
+/**
+ * Props du composant KanbanBoard principal
+ */
+export interface KanbanBoardProps<T extends BaseEntity> {
+  /** Données à afficher (toutes les entités) */
+  items: T[]
+  
+  /** Configuration du Kanban */
+  config: KanbanConfig<T>
+  
+  /** Callback appelé quand un item est déplacé entre colonnes */
+  onItemMove: (event: KanbanMoveEvent<T>) => void | Promise<void>
+  
+  /** Callback appelé quand on clique sur une carte */
+  onItemClick?: (item: T) => void
+  
+  /** État de chargement */
+  isLoading?: boolean
+  
+  /** Fonction pour charger plus d'items dans une colonne (scroll infini) */
+  onLoadMore?: (columnId: string) => void
+  
+  /** Indique quelles colonnes ont plus d'items à charger */
+  columnsHasMore?: Record<string, boolean>
+  
+  /** Rendu personnalisé pour le contenu d'une carte */
+  renderCardContent?: (item: T, config: KanbanConfig<T>) => React.ReactNode
+  
+  /** Classes CSS additionnelles */
+  className?: string
+}
+
+/**
+ * Props du composant KanbanColumn
+ */
+export interface KanbanColumnProps<T extends BaseEntity> {
+  /** Configuration de la colonne */
+  column: KanbanColumn<T>
+  
+  /** Configuration globale du Kanban */
+  config: KanbanConfig<T>
+  
+  /** Callback quand on clique sur une carte */
+  onItemClick?: (item: T) => void
+  
+  /** Callback pour charger plus d'items */
+  onLoadMore?: () => void
+  
+  /** Rendu personnalisé pour le contenu d'une carte */
+  renderCardContent?: (item: T, config: KanbanConfig<T>) => React.ReactNode
+}
+
+/**
+ * Props du composant KanbanCard
+ */
+export interface KanbanCardProps<T extends BaseEntity> {
+  /** L'item à afficher */
+  item: T
+  
+  /** Configuration du Kanban */
+  config: KanbanConfig<T>
+  
+  /** Callback au clic */
+  onClick?: () => void
+  
+  /** Rendu personnalisé pour le contenu */
+  renderContent?: (item: T, config: KanbanConfig<T>) => React.ReactNode
+  
+  /** Indique si la carte est en cours de drag */
+  isDragging?: boolean
+}
+
+// ============================================================================
+// UTILITAIRES DE TYPAGE
+// ============================================================================
+
+/**
+ * Extrait les clés d'une entité qui peuvent servir de champ de groupement
+ * (uniquement les champs string ou undefined)
+ */
+export type GroupableFields<T> = {
+  [K in keyof T]: T[K] extends string | undefined ? K : never
+}[keyof T]
+
+/**
+ * Type helper pour obtenir la valeur d'un champ potentiellement nested
+ * Ex: 'monde.nom' sur un Roman
+ */
+export type NestedKeyOf<T> = {
+  [K in keyof T & string]: T[K] extends object
+    ? `${K}.${keyof T[K] & string}` | K
+    : K
+}[keyof T & string]
+```
+
+---
+
+### Étape 1.3 : Hook `useKanbanData`
+
+Ce hook va transformer une liste plate d'entités en structure de colonnes pour le Kanban.
+
+Crée le fichier `/hooks/useKanbanData.ts` :
+
+```typescript
+/**
+ * Hook pour transformer des données plates en structure Kanban
+ * Gère le groupement dynamique par n'importe quel champ
+ * @module useKanbanData
+ */
+
+import { useMemo } from 'react'
+import { BaseEntity } from '@/types/api'
+import { 
+  KanbanConfig, 
+  KanbanColumn, 
+  KanbanColumnConfig 
+} from '@/types/kanban'
+
+// ============================================================================
+// UTILITAIRES
+// ============================================================================
+
+/**
+ * Récupère la valeur d'un champ potentiellement nested
+ * Ex: getNestedValue(roman, 'monde.nom') -> 'Terre du Milieu'
+ */
+function getNestedValue<T>(obj: T, path: string): unknown {
+  return path.split('.').reduce<unknown>((current, key) => {
+    if (current === null || current === undefined) return undefined
+    return (current as Record<string, unknown>)[key]
+  }, obj)
+}
+
+/**
+ * Convertit une valeur en string pour l'ID de colonne
+ */
+function valueToColumnId(value: unknown): string {
+  if (value === null || value === undefined || value === '') {
+    return '__empty__'
+  }
+  return String(value)
+}
+
+// ============================================================================
+// HOOK PRINCIPAL
+// ============================================================================
+
+interface UseKanbanDataOptions<T extends BaseEntity> {
+  /** Les items à grouper */
+  items: T[]
+  
+  /** Configuration du Kanban */
+  config: KanbanConfig<T>
+  
+  /** 
+   * Colonnes prédéfinies (optionnel)
+   * Si fourni, seules ces colonnes seront affichées dans cet ordre
+   * Sinon, les colonnes sont générées dynamiquement depuis les données
+   */
+  predefinedColumns?: KanbanColumnConfig[]
+}
+
+interface UseKanbanDataResult<T extends BaseEntity> {
+  /** Les colonnes avec leurs items groupés */
+  columns: KanbanColumn<T>[]
+  
+  /** Toutes les valeurs uniques trouvées pour le champ de groupement */
+  uniqueValues: string[]
+  
+  /** Nombre total d'items */
+  totalItems: number
+}
+
+/**
+ * Hook qui transforme une liste d'entités en colonnes Kanban
+ * 
+ * @example
+ * ```tsx
+ * const { columns } = useKanbanData({
+ *   items: romans,
+ *   config: {
+ *     groupByField: 'statut',
+ *     cardTitleField: 'nom',
+ *     cardFields: [{ key: 'resume', type: 'text', truncate: 100 }],
+ *     emptyColumnTitle: 'Sans statut'
+ *   }
+ * })
+ * ```
+ */
+export function useKanbanData<T extends BaseEntity>({
+  items,
+  config,
+  predefinedColumns
+}: UseKanbanDataOptions<T>): UseKanbanDataResult<T> {
+  
+  const result = useMemo(() => {
+    // 1. Grouper les items par valeur du champ
+    const groupedItems = new Map<string, T[]>()
+    const uniqueValuesSet = new Set<string>()
+    
+    for (const item of items) {
+      const rawValue = getNestedValue(item, config.groupByField as string)
+      const columnId = valueToColumnId(rawValue)
+      
+      uniqueValuesSet.add(columnId)
+      
+      const existing = groupedItems.get(columnId) || []
+      existing.push(item)
+      groupedItems.set(columnId, existing)
+    }
+    
+    // 2. Construire les colonnes
+    let columns: KanbanColumn<T>[]
+    
+    if (predefinedColumns && predefinedColumns.length > 0) {
+      // Utiliser les colonnes prédéfinies (dans l'ordre fourni)
+      columns = predefinedColumns.map(colConfig => {
+        const columnItems = groupedItems.get(colConfig.id) || []
+        return {
+          id: colConfig.id,
+          title: colConfig.title,
+          color: colConfig.color,
+          items: columnItems,
+          totalCount: columnItems.length,
+          hasMore: false // Sera géré par le composant parent pour le scroll infini
+        }
+      })
+      
+      // Ajouter une colonne pour les items sans valeur si nécessaire
+      const emptyItems = groupedItems.get('__empty__')
+      if (emptyItems && emptyItems.length > 0) {
+        const emptyColumnExists = predefinedColumns.some(c => c.id === '__empty__')
+        if (!emptyColumnExists) {
+          columns.push({
+            id: '__empty__',
+            title: config.emptyColumnTitle || 'Non défini',
+            items: emptyItems,
+            totalCount: emptyItems.length,
+            hasMore: false
+          })
+        }
+      }
+    } else {
+      // Générer les colonnes automatiquement depuis les données
+      const sortedColumnIds = Array.from(uniqueValuesSet).sort((a, b) => {
+        // Mettre "__empty__" à la fin
+        if (a === '__empty__') return 1
+        if (b === '__empty__') return -1
+        return a.localeCompare(b)
+      })
+      
+      columns = sortedColumnIds.map(columnId => {
+        const columnItems = groupedItems.get(columnId) || []
+        return {
+          id: columnId,
+          title: columnId === '__empty__' 
+            ? (config.emptyColumnTitle || 'Non défini')
+            : columnId,
+          items: columnItems,
+          totalCount: columnItems.length,
+          hasMore: false
+        }
+      })
+    }
+    
+    return {
+      columns,
+      uniqueValues: Array.from(uniqueValuesSet),
+      totalItems: items.length
+    }
+  }, [items, config.groupByField, config.emptyColumnTitle, predefinedColumns])
+  
+  return result
+}
+
+// ============================================================================
+// HOOK POUR EXTRAIRE LES CHAMPS GROUPABLES
+// ============================================================================
+
+interface FieldInfo {
+  key: string
+  label: string
+  type: 'string' | 'relation' | 'other'
+}
+
+/**
+ * Hook utilitaire pour extraire les champs d'une entité qui peuvent
+ * servir de base pour le groupement Kanban
+ * 
+ * @param sampleItem Un exemple d'item pour analyser la structure
+ * @param excludeFields Champs à exclure (ex: 'id', 'createdAt')
+ */
+export function useGroupableFields<T extends BaseEntity>(
+  sampleItem: T | undefined,
+  excludeFields: string[] = ['id', 'createdAt', 'updatedAt']
+): FieldInfo[] {
+  
+  return useMemo(() => {
+    if (!sampleItem) return []
+    
+    const fields: FieldInfo[] = []
+    
+    for (const [key, value] of Object.entries(sampleItem)) {
+      // Exclure les champs non souhaités
+      if (excludeFields.includes(key)) continue
+      
+      // Déterminer le type
+      if (typeof value === 'string') {
+        fields.push({
+          key,
+          label: formatFieldLabel(key),
+          type: 'string'
+        })
+      } else if (value !== null && typeof value === 'object' && 'id' in value) {
+        // C'est probablement une relation (objet avec id)
+        fields.push({
+          key,
+          label: formatFieldLabel(key),
+          type: 'relation'
+        })
+        
+        // Ajouter aussi les sous-champs string de la relation
+        for (const [subKey, subValue] of Object.entries(value)) {
+          if (typeof subValue === 'string' && subKey !== 'id') {
+            fields.push({
+              key: `${key}.${subKey}`,
+              label: `${formatFieldLabel(key)} → ${formatFieldLabel(subKey)}`,
+              type: 'string'
+            })
+          }
+        }
+      }
+    }
+    
+    return fields
+  }, [sampleItem, excludeFields])
+}
+
+/**
+ * Formate une clé de champ en label lisible
+ * Ex: 'createdAt' -> 'Created At', 'nom' -> 'Nom'
+ */
+function formatFieldLabel(key: string): string {
+  return key
+    // Séparer camelCase
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    // Première lettre en majuscule
+    .replace(/^./, str => str.toUpperCase())
+}
+```
+
+---
+
+## ✅ Checkpoint Phase 1
+
+Voici ce que nous avons créé :
+
+| Fichier | Description |
+|---------|-------------|
+| `@dnd-kit/*` | Librairies installées pour le drag & drop |
+| `/types/kanban.ts` | Types génériques pour tout le système Kanban |
+| `/hooks/useKanbanData.ts` | Hook de transformation des données + extraction des champs groupables |
+
+### Points clés de cette architecture :
+
+1. **Généricité totale** : Le type `<T extends BaseEntity>` permet d'utiliser le Kanban avec n'importe quelle entité (Roman, Personnage, Événement...)
+
+2. **Champs nested supportés** : On peut grouper par `monde.nom` et pas seulement `statut`
+
+3. **Colonnes flexibles** : Soit prédéfinies (ordre et couleurs fixes), soit générées dynamiquement depuis les données
+
+4. **Préparé pour le scroll infini** : Les colonnes ont `hasMore` et `totalCount` pour la pagination future
+
+---
+
+## ❓ Validation avant Phase 2
+
+Avant de passer aux composants React, j'aimerais valider avec toi :
+
+1. **Structure des fichiers** : Je propose de mettre les composants Kanban dans `/components/ui/kanban/`. Est-ce cohérent avec ton organisation actuelle ?
+
+2. **Chemins d'import** : J'utilise `@/types/...` et `@/hooks/...`. Ce sont bien tes alias configurés ?
+
+3. **Les types te semblent-ils complets ?** Y a-t-il des cas d'usage que j'aurais oubliés ?
+
+Une fois validé, on attaque la **Phase 2 : Composants de base** avec `KanbanBoard`, `KanbanColumn` et `KanbanCard` ! 🎯
