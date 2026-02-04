@@ -1,0 +1,722 @@
+
+
+---
+
+## 🚀 Phase 2 : Composants de base
+
+Je vais créer les composants dans l'ordre suivant, du plus simple au plus complexe :
+
+1. `KanbanCard` - La carte draggable
+2. `KanbanColumnHeader` - L'en-tête avec titre et compteur
+3. `KanbanColumn` - Une colonne avec ses cartes
+4. `KanbanBoard` - Le conteneur principal avec le contexte DnD
+
+---
+
+### Étape 2.1 : `KanbanCard`
+
+C'est le composant qui représente une entité dans le Kanban. Il doit être draggable et afficher les informations configurées.
+
+Crée le fichier `/components/ui/kanban/KanbanCard.tsx` :
+
+```typescript
+'use client'
+
+/**
+ * KanbanCard - Carte draggable générique pour le Kanban
+ * Affiche une entité avec ses champs configurés
+ * @module KanbanCard
+ */
+
+import { useSortable } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { BaseEntity } from '@/types/api'
+import { KanbanCardProps, KanbanCardFieldConfig } from '@/types/kanban'
+
+// ============================================================================
+// UTILITAIRES
+// ============================================================================
+
+/**
+ * Récupère la valeur d'un champ potentiellement nested
+ */
+function getNestedValue<T>(obj: T, path: string): unknown {
+  return path.split('.').reduce<unknown>((current, key) => {
+    if (current === null || current === undefined) return undefined
+    return (current as Record<string, unknown>)[key]
+  }, obj)
+}
+
+/**
+ * Tronque un texte si nécessaire
+ */
+function truncateText(text: string, maxLength?: number): string {
+  if (!maxLength || text.length <= maxLength) return text
+  return text.slice(0, maxLength).trim() + '...'
+}
+
+/**
+ * Formate une valeur pour l'affichage selon son type
+ */
+function formatFieldValue(
+  value: unknown, 
+  fieldConfig: KanbanCardFieldConfig
+): string {
+  if (value === null || value === undefined) return ''
+  
+  const stringValue = String(value)
+  
+  switch (fieldConfig.type) {
+    case 'date':
+      try {
+        return new Date(stringValue).toLocaleDateString('fr-FR')
+      } catch {
+        return stringValue
+      }
+    case 'text':
+    case 'badge':
+    case 'relation':
+    default:
+      return truncateText(stringValue, fieldConfig.truncate)
+  }
+}
+
+// ============================================================================
+// COMPOSANT FIELD RENDERER
+// ============================================================================
+
+interface CardFieldProps {
+  fieldConfig: KanbanCardFieldConfig
+  value: unknown
+}
+
+function CardField({ fieldConfig, value }: CardFieldProps) {
+  const formattedValue = formatFieldValue(value, fieldConfig)
+  
+  if (!formattedValue) return null
+  
+  switch (fieldConfig.type) {
+    case 'badge':
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+          {formattedValue}
+        </span>
+      )
+    
+    case 'relation':
+      return (
+        <span className="text-xs text-blue-600">
+          {formattedValue}
+        </span>
+      )
+    
+    case 'date':
+      return (
+        <span className="text-xs text-gray-500">
+          {formattedValue}
+        </span>
+      )
+    
+    case 'text':
+    default:
+      return (
+        <p className="text-sm text-gray-600 line-clamp-2">
+          {formattedValue}
+        </p>
+      )
+  }
+}
+
+// ============================================================================
+// COMPOSANT PRINCIPAL
+// ============================================================================
+
+export function KanbanCard<T extends BaseEntity>({
+  item,
+  config,
+  onClick,
+  renderContent,
+  isDragging: isDraggingProp
+}: KanbanCardProps<T>) {
+  
+  // Configuration du drag & drop avec dnd-kit
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging: isDraggingSortable
+  } = useSortable({ 
+    id: item.id,
+    data: {
+      type: 'card',
+      item
+    }
+  })
+  
+  const isDragging = isDraggingProp ?? isDraggingSortable
+  
+  // Styles de transformation pendant le drag
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  }
+  
+  // Récupérer le titre de la carte
+  const title = getNestedValue(item, config.cardTitleField as string)
+  const titleString = title ? String(title) : 'Sans titre'
+  
+  // Gestion du clic (ne pas déclencher si on drag)
+  const handleClick = () => {
+    if (!isDragging && onClick) {
+      onClick()
+    }
+  }
+  
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`
+        bg-white rounded-lg border border-gray-200 p-3 
+        shadow-sm hover:shadow-md transition-shadow
+        cursor-grab active:cursor-grabbing
+        ${isDragging ? 'opacity-50 shadow-lg ring-2 ring-blue-500' : ''}
+      `}
+      onClick={handleClick}
+      {...attributes}
+      {...listeners}
+    >
+      {/* Contenu personnalisé ou contenu par défaut */}
+      {renderContent ? (
+        renderContent(item, config)
+      ) : (
+        <div className="space-y-2">
+          {/* Titre principal */}
+          <h4 className="font-medium text-gray-900 text-sm leading-tight">
+            {titleString}
+          </h4>
+          
+          {/* Champs configurés */}
+          {config.cardFields.length > 0 && (
+            <div className="space-y-1.5">
+              {config.cardFields.map((fieldConfig) => {
+                const value = getNestedValue(item, fieldConfig.key)
+                return (
+                  <CardField 
+                    key={fieldConfig.key}
+                    fieldConfig={fieldConfig}
+                    value={value}
+                  />
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================================
+// COMPOSANT OVERLAY (pour le drag preview)
+// ============================================================================
+
+/**
+ * Version simplifiée de la carte pour l'overlay de drag
+ * Affichée sous le curseur pendant le déplacement
+ */
+export function KanbanCardOverlay<T extends BaseEntity>({
+  item,
+  config
+}: Pick<KanbanCardProps<T>, 'item' | 'config'>) {
+  const title = getNestedValue(item, config.cardTitleField as string)
+  const titleString = title ? String(title) : 'Sans titre'
+  
+  return (
+    <div className="bg-white rounded-lg border-2 border-blue-500 p-3 shadow-xl w-64">
+      <h4 className="font-medium text-gray-900 text-sm">
+        {titleString}
+      </h4>
+    </div>
+  )
+}
+```
+
+---
+
+### Étape 2.2 : `KanbanColumnHeader`
+
+L'en-tête de colonne avec le titre et le compteur.
+
+Crée le fichier `/components/ui/kanban/KanbanColumnHeader.tsx` :
+
+```typescript
+'use client'
+
+/**
+ * KanbanColumnHeader - En-tête d'une colonne Kanban
+ * Affiche le titre, le compteur et optionnellement une couleur
+ * @module KanbanColumnHeader
+ */
+
+interface KanbanColumnHeaderProps {
+  /** Titre de la colonne */
+  title: string
+  
+  /** Nombre d'items dans la colonne */
+  count: number
+  
+  /** Nombre total d'items (si différent de count, pour pagination) */
+  totalCount?: number
+  
+  /** Couleur de la colonne (pour la bordure/indicateur) */
+  color?: string
+  
+  /** La colonne est-elle en train de recevoir un drop ? */
+  isOver?: boolean
+}
+
+/**
+ * Palette de couleurs prédéfinies pour les colonnes
+ * Utilisée si aucune couleur n'est spécifiée
+ */
+const DEFAULT_COLORS: Record<string, string> = {
+  // Statuts courants
+  'idée': '#9CA3AF',      // gray
+  'brouillon': '#FCD34D', // yellow
+  'en cours': '#60A5FA',  // blue
+  'révision': '#F472B6',  // pink
+  'terminé': '#34D399',   // green
+  'publié': '#A78BFA',    // purple
+  'archivé': '#6B7280',   // gray-dark
+  
+  // Fallback
+  '__empty__': '#E5E7EB', // gray-light
+}
+
+/**
+ * Retourne une couleur pour une colonne
+ */
+function getColumnColor(title: string, customColor?: string): string {
+  if (customColor) return customColor
+  
+  const normalizedTitle = title.toLowerCase().trim()
+  return DEFAULT_COLORS[normalizedTitle] || '#3B82F6' // blue par défaut
+}
+
+export function KanbanColumnHeader({
+  title,
+  count,
+  totalCount,
+  color,
+  isOver
+}: KanbanColumnHeaderProps) {
+  
+  const columnColor = getColumnColor(title, color)
+  const displayCount = totalCount !== undefined && totalCount !== count 
+    ? `${count} / ${totalCount}`
+    : count
+  
+  return (
+    <div 
+      className={`
+        flex items-center justify-between p-3 rounded-t-lg
+        border-b-2 transition-colors duration-200
+        ${isOver ? 'bg-blue-50' : 'bg-gray-50'}
+      `}
+      style={{ borderBottomColor: columnColor }}
+    >
+      {/* Titre avec indicateur de couleur */}
+      <div className="flex items-center gap-2">
+        <div 
+          className="w-3 h-3 rounded-full flex-shrink-0"
+          style={{ backgroundColor: columnColor }}
+        />
+        <h3 className="font-semibold text-gray-900 text-sm">
+          {title}
+        </h3>
+      </div>
+      
+      {/* Compteur */}
+      <span 
+        className={`
+          px-2 py-0.5 rounded-full text-xs font-medium
+          ${isOver ? 'bg-blue-100 text-blue-800' : 'bg-gray-200 text-gray-700'}
+        `}
+      >
+        {displayCount}
+      </span>
+    </div>
+  )
+}
+```
+
+---
+
+### Étape 2.3 : `KanbanColumn`
+
+La colonne qui contient les cartes avec support pour le scroll infini.
+
+Crée le fichier `/components/ui/kanban/KanbanColumn.tsx` :
+
+```typescript
+'use client'
+
+/**
+ * KanbanColumn - Colonne du Kanban avec ses cartes
+ * Supporte le scroll infini et le drop de cartes
+ * @module KanbanColumn
+ */
+
+import { useCallback, useRef, useEffect } from 'react'
+import { useDroppable } from '@dnd-kit/core'
+import { 
+  SortableContext, 
+  verticalListSortingStrategy 
+} from '@dnd-kit/sortable'
+import { BaseEntity } from '@/types/api'
+import { KanbanColumnProps } from '@/types/kanban'
+import { KanbanCard } from './KanbanCard'
+import { KanbanColumnHeader } from './KanbanColumnHeader'
+
+// ============================================================================
+// COMPOSANT PRINCIPAL
+// ============================================================================
+
+export function KanbanColumn<T extends BaseEntity>({
+  column,
+  config,
+  onItemClick,
+  onLoadMore,
+  renderCardContent
+}: KanbanColumnProps<T>) {
+  
+  // Référence pour le scroll infini
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const loadMoreTriggerRef = useRef<HTMLDivElement>(null)
+  
+  // Configuration du droppable (zone de drop)
+  const { setNodeRef, isOver } = useDroppable({
+    id: column.id,
+    data: {
+      type: 'column',
+      column
+    }
+  })
+  
+  // IDs des items pour le SortableContext
+  const itemIds = column.items.map(item => item.id)
+  
+  // ============================================================================
+  // SCROLL INFINI
+  // ============================================================================
+  
+  const handleScroll = useCallback(() => {
+    if (!onLoadMore || !column.hasMore) return
+    
+    const container = scrollContainerRef.current
+    const trigger = loadMoreTriggerRef.current
+    
+    if (!container || !trigger) return
+    
+    const containerRect = container.getBoundingClientRect()
+    const triggerRect = trigger.getBoundingClientRect()
+    
+    // Charger plus quand le trigger est visible (200px avant la fin)
+    if (triggerRect.top < containerRect.bottom + 200) {
+      onLoadMore()
+    }
+  }, [onLoadMore, column.hasMore])
+  
+  // Observer le scroll
+  useEffect(() => {
+    const container = scrollContainerRef.current
+    if (!container) return
+    
+    container.addEventListener('scroll', handleScroll)
+    return () => container.removeEventListener('scroll', handleScroll)
+  }, [handleScroll])
+  
+  // ============================================================================
+  // RENDU
+  // ============================================================================
+  
+  return (
+    <div 
+      className={`
+        flex flex-col bg-gray-100 rounded-lg min-w-[280px] w-[280px]
+        transition-colors duration-200
+        ${isOver ? 'ring-2 ring-blue-500 ring-opacity-50' : ''}
+      `}
+    >
+      {/* En-tête de colonne */}
+      <KanbanColumnHeader
+        title={column.title}
+        count={column.items.length}
+        totalCount={column.totalCount}
+        color={column.color}
+        isOver={isOver}
+      />
+      
+      {/* Zone de drop avec liste de cartes */}
+      <div
+        ref={setNodeRef}
+        className="flex-1 min-h-0"
+      >
+        <div
+          ref={scrollContainerRef}
+          className="h-full overflow-y-auto p-2 space-y-2"
+          style={{ maxHeight: 'calc(100vh - 200px)' }}
+        >
+          <SortableContext 
+            items={itemIds}
+            strategy={verticalListSortingStrategy}
+          >
+            {column.items.map((item) => (
+              <KanbanCard
+                key={item.id}
+                item={item}
+                config={config}
+                onClick={onItemClick ? () => onItemClick(item) : undefined}
+                renderContent={renderCardContent}
+              />
+            ))}
+          </SortableContext>
+          
+          {/* Placeholder quand la colonne est vide */}
+          {column.items.length === 0 && (
+            <div 
+              className={`
+                p-4 text-center text-sm text-gray-500 
+                border-2 border-dashed border-gray-300 rounded-lg
+                ${isOver ? 'border-blue-400 bg-blue-50 text-blue-600' : ''}
+              `}
+            >
+              {isOver ? 'Déposer ici' : 'Aucun élément'}
+            </div>
+          )}
+          
+          {/* Trigger pour le chargement infini */}
+          {column.hasMore && (
+            <div 
+              ref={loadMoreTriggerRef}
+              className="p-2 text-center"
+            >
+              <span className="text-xs text-gray-400">
+                Chargement...
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+### Étape 2.4 : `KanbanBoard`
+
+Le composant principal qui orchestre tout avec le contexte DnD.
+
+Crée le fichier `/components/ui/kanban/KanbanBoard.tsx` :
+
+```typescript
+'use client'
+
+/**
+ * KanbanBoard - Composant principal du Kanban
+ * Gère le contexte drag & drop et orchestre les colonnes
+ * @module KanbanBoard
+ */
+
+import { useState, useCallback, useMemo } from 'react'
+import {
+  DndContext,
+  DragOverlay,
+  closestCorners,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragStartEvent,
+  DragEndEvent,
+  DragOverEvent,
+} from '@dnd-kit/core'
+import { sortableKeyboardCoordinates } from '@dnd-kit/sortable'
+import { BaseEntity } from '@/types/api'
+import { KanbanBoardProps, KanbanMoveEvent } from '@/types/kanban'
+import { useKanbanData } from '@/hooks/useKanbanData'
+import { KanbanColumn } from './KanbanColumn'
+import { KanbanCardOverlay } from './KanbanCard'
+
+// ============================================================================
+// COMPOSANT PRINCIPAL
+// ============================================================================
+
+export function KanbanBoard<T extends BaseEntity>({
+  items,
+  config,
+  onItemMove,
+  onItemClick,
+  isLoading,
+  onLoadMore,
+  columnsHasMore,
+  renderCardContent,
+  className
+}: KanbanBoardProps<T>) {
+  
+  // État local pour l'item en cours de drag
+  const [activeItem, setActiveItem] = useState<T | null>(null)
+  
+  // Transformer les données en colonnes
+  const { columns } = useKanbanData({
+    items,
+    config,
+    predefinedColumns: config.columns
+  })
+  
+  // Enrichir les colonnes avec hasMore
+  const enrichedColumns = useMemo(() => {
+    return columns.map(col => ({
+      ...col,
+      hasMore: columnsHasMore?.[col.id] ?? false
+    }))
+  }, [columns, columnsHasMore])
+  
+  // ============================================================================
+  // CONFIGURATION DND-KIT
+  // ============================================================================
+  
+  // Sensors pour détecter les interactions (souris, clavier)
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      // Distance minimale avant de commencer le drag (évite les clics accidentels)
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  )
+  
+  // ============================================================================
+  // HANDLERS DND
+  // ============================================================================
+  
+  /**
+   * Début du drag : mémoriser l'item actif
+   */
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    const { active } = event
+    const draggedItem = items.find(item => item.id === active.id)
+    if (draggedItem) {
+      setActiveItem(draggedItem)
+    }
+  }, [items])
+  
+  /**
+   * Pendant le drag (survol d'une zone)
+   * Utilisé pour le feedback visuel en temps réel
+   */
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    // On pourrait implémenter un preview ici si nécessaire
+    // Pour l'instant, le feedback visuel est géré par isOver dans KanbanColumn
+  }, [])
+  
+  /**
+   * Fin du drag : déclencher le déplacement si nécessaire
+   */
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event
+    
+    setActiveItem(null)
+    
+    if (!over) return
+    
+    // Trouver l'item déplacé
+    const draggedItem = items.find(item => item.id === active.id)
+    if (!draggedItem) return
+    
+    // Déterminer la colonne source
+    const sourceColumn = enrichedColumns.find(col => 
+      col.items.some(item => item.id === active.id)
+    )
+    
+    // Déterminer la colonne destination
+    let destinationColumnId: string
+    
+    // Si on drop sur une colonne directement
+    if (over.data.current?.type === 'column') {
+      destinationColumnId = over.id as string
+    } 
+    // Si on drop sur une carte, trouver sa colonne
+    else {
+      const overColumn = enrichedColumns.find(col =>
+        col.items.some(item => item.id === over.id)
+      )
+      destinationColumnId = overColumn?.id ?? (over.id as string)
+    }
+    
+    // Si pas de changement de colonne, ne rien faire
+    // (le réordonnancement intra-colonne n'est pas demandé pour l'instant)
+    if (sourceColumn?.id === destinationColumnId) return
+    
+    // Calculer le nouvel index (à la fin de la colonne destination)
+    const destinationColumn = enrichedColumns.find(col => col.id === destinationColumnId)
+    const newIndex = destinationColumn?.items.length ?? 0
+    
+    // Déclencher le callback
+    const moveEvent: KanbanMoveEvent<T> = {
+      item: draggedItem,
+      sourceColumnId: sourceColumn?.id ?? '',
+      destinationColumnId,
+      newIndex
+    }
+    
+    onItemMove(moveEvent)
+  }, [items, enrichedColumns, onItemMove])
+  
+  // ============================================================================
+  // RENDU
+  // ============================================================================
+  
+  // État de chargement global
+  if (isLoading && items.length === 0) {
+    return (
+      <div className={`flex gap-4 overflow-x-auto p-4 ${className ?? ''}`}>
+        {/* Skeleton des colonnes */}
+        {[1, 2, 3, 4].map(i => (
+          <div 
+            key={i}
+            className="flex flex-col bg-gray-100 rounded-lg min-w-[280px] w-[280px] animate-pulse"
+          >
+            <div className="p-3 border-b border-gray-200">
+              <div className="h-5 bg-gray-300 rounded w-24" />
+            </div>
+            <div className="p-2 space-y-2">
+              {[1, 2, 3].map(j => (
+                <div key={j} className="h-20 bg-gray-200 rounded-lg" />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  }
+  
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCorners}
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDragEnd={handleDragEnd}
+    >
+      <div 
+        className={`
+          fl
