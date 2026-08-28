@@ -1,0 +1,106 @@
+## 1. Où trier ?
+
+Le tri doit idéalement se faire **à la source**, dans la macro `#TabSpeDisplayRapidefilter` qui construit la liste des valeurs. Je n'ai pas son code dans le projet — si tu me le partages, je te livre la modification exacte. En attendant, voici les deux niveaux d'intervention possibles.
+
+## 2. Solution recommandée — tri à la source (Velocity)
+
+### 2.1 Si la liste vient d'une requête HQL/XWQL
+
+Ajouter un `order by` insensible à la casse directement dans la requête :
+
+```velocity
+## Tri alphabétique insensible à la casse, réalisé côté base
+#set($hqlProgrammes = "select distinct s_prgm.value
+        from BaseObject o, StringProperty s_prgm
+        where o.className = 'EcheancierGOAL.Classe.EcheancierGOALClass'
+            and s_prgm.id.id = o.id
+            and s_prgm.name = 'S_Programme'
+            and s_prgm.value is not null
+            and s_prgm.value <> ''
+        order by lower(s_prgm.value)")
+#set($listeProgrammes = $services.query.hql($hqlProgrammes).execute())
+```
+
+C'est l'option la plus performante : aucun traitement supplémentaire côté serveur d'application, et le tri est stable quel que soit le volume.
+
+### 2.2 Si la liste est déjà construite en mémoire (métadonnées, contexte…)
+
+```velocity
+## Tri alphabétique de la liste avant affichage
+#set($listeProgrammesTriee = $collectiontool.sort($listeProgrammes))
+```
+
+⚠️ `$collectiontool.sort` applique l'ordre naturel de Java : les majuscules passent avant les minuscules et les accents se placent après `Z`. Acceptable si les codes programmes sont normalisés en majuscules non accentuées (cas fréquent sur PDA) ; sinon, préférer le tri en base du 2.1.
+
+## 3. Solution immédiate — tri du DOM côté client
+
+Applicable sans toucher à la macro, si tu veux valider le rendu rapidement.
+
+```velocity
+{{html clean="false"}}
+<script type="text/javascript">
+/**
+ * @fileoverview Tri alphabétique des options du filtre rapide Programme
+ *
+ * Réordonne les <li> de la liste selon un tri français (insensible à la
+ * casse et aux accents, avec gestion des suites numériques).
+ * Le tri est appliqué une seule fois au chargement, sur le DOM déjà généré
+ * par #TabSpeDisplayRapidefilter : aucune modification de la macro.
+ */
+(function () {
+    'use strict';
+
+    /** Collateur français : accents et casse ignorés, tri numérique naturel */
+    const COLLATEUR = new Intl.Collator('fr', {
+        sensitivity: 'base',
+        numeric: true
+    });
+
+    /**
+     * @description Trie alphabétiquement les options d'une liste de filtre rapide
+     * @param {string} idListe - Identifiant du <ul> à trier
+     * @returns {void}
+     */
+    const trierOptionsFiltre = (idListe) => {
+        const ul = document.getElementById(idListe);
+        if (!ul) return;
+
+        const options = Array.from(ul.querySelectorAll(':scope > li'));
+        if (options.length < 2) return;
+
+        /**
+         * Libellé retenu pour la comparaison : texte visible de la ligne,
+         * à défaut la valeur portée par la case à cocher.
+         */
+        const libelle = (li) => {
+            const texte = li.textContent.trim();
+            if (texte !== '') return texte;
+            const cb = li.querySelector('input[type="checkbox"]');
+            return cb ? (cb.value || '') : '';
+        };
+
+        options
+            .sort((a, b) => COLLATEUR.compare(libelle(a), libelle(b)))
+            .forEach((li) => ul.appendChild(li));
+    };
+
+    const init = () => trierOptionsFiltre('RapidFilterMySelectOptionsULS_Programme');
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
+</script>
+{{/html}}
+```
+
+## 4. Points d'attention
+
+- **Option « Tous » / valeur spéciale** : si la liste comporte une entrée générique en tête, elle serait déplacée par le tri. Il faut alors l'exclure du `sort` (par exemple via un attribut `data-fixe` sur le `<li>` ou en la sortant du tableau avant tri).
+- **Re-rendu dynamique** : si un champ de recherche filtre la liste en régénérant les `<li>`, l'ordre initial serait restauré. Dans ce cas, il faut soit rappeler `trierOptionsFiltre` après le filtrage, soit — de préférence — trier à la source (§2), ce qui rend le problème sans objet.
+- **Généralisation** : la fonction accepte un identifiant en paramètre, donc les autres filtres rapides (`S_UO_Pilote`, `S_TypeE`…) peuvent être triés par un simple appel supplémentaire.
+- **Cohérence PDE/PDA** : si le même défaut existe côté PDE, la correction à la source est mutualisable dans la macro commune.
+
+Envoie-moi le code de `#TabSpeDisplayRapidefilter` et je te livre directement la version corrigée, avec le tri intégré au bon endroit plutôt qu'en post-traitement.
