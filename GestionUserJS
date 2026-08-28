@@ -1,0 +1,724 @@
+/**
+ * fileoverview Filtres rapides de l'échéancier GOAL en mode Selectize distant.
+ *
+ * Remplace les listes de checkboxes préchargées à l'affichage de la page par un
+ * chargement à la demande, servi par EGOAL_SearchFiltreRapideGroovy.
+ *
+ * Contrat de compatibilité : chaque filtre alimente l'input caché
+ * RapidFilterSelectInput${champ} avec les valeurs sélectionnées jointes par
+ * ", ". appliquerFiltreRapide() et appliquerFiltreRapideUOPilote() sont donc
+ * utilisées telles quelles.
+ *
+ * Ergonomie :
+ * - La liste complète du périmètre de l'utilisateur est chargée à l'ouverture
+ *   du filtre ; la saisie de caractères vient l'affiner.
+ * - Chaque ligne porte une case à cocher : les valeurs sélectionnées restent
+ *   visibles dans la liste, cochées, et se décochent d'un clic.
+ * - Le champ conserve une hauteur d'une ligne ; une pastille indique le nombre
+ *   de valeurs sélectionnées.
+ *
+ * Dépendances : RequireJS, jquery, xwiki-selectize (Selectize 0.12.5)
+ */
+(function () {
+    'use strict';
+
+    // =========================================================================
+    // CONSTANTES
+    // =========================================================================
+
+    /** const {number} Passer à 1 pour tracer les échanges dans la console */
+    const DEBUG = 0;
+
+    /** const {string} Séparateur attendu par appliquerFiltreRapide() */
+    const SEPARATEUR = ', ';
+
+    /** const {number} Temporisation entre deux interrogations serveur (ms) */
+    const DELAI_RECHERCHE = 300;
+
+    /**
+     * const {number} Nombre maximum d'options rendues simultanément dans la
+     *        liste. Le défaut de Selectize est 1000 ; la valeur est relevée pour
+     *        que le chargement intégral reste effectivement intégral à l'écran.
+     */
+    const MAX_OPTIONS = 5000;
+
+    /**
+     * const {number} Nombre de valeurs à partir duquel la pastille apparaît.
+     *        À 2, une sélection unique reste lisible sans surcharge visuelle.
+     */
+    const SEUIL_COMPTEUR = 1;
+
+    /** const {string} Indication affichée si le plafond serveur est atteint */
+    const TEXTE_AFFINER = 'Trop de valeurs : saisissez pour affiner la recherche';
+
+    /** const {Array<string>} Champs dont les valeurs dépendent de l'UO sélectionnée */
+    const CHAMPS_DEPENDANTS_UO = ['S_Destinataire', 'S_Contributeur', 'S_ActionReq'];
+
+    /** const {string} URL de l'endpoint de recherche */
+    const ENDPOINT = new XWiki.Document(
+        'EGOAL_SearchFiltreRapideGroovy',
+        'EcheancierGOAL.MacroGroovy'
+    ).getURL('get', 'outputSyntax=plain');
+
+    // =========================================================================
+    // CONTEXTE DE LA PAGE
+    // =========================================================================
+
+    /**
+     * description  Profil GOAL courant. Priorité à l'input dédié (profil effectif,
+     *              y compris quand il n'est pas présent dans l'URL), repli sur le
+     *              span historique alimenté par $request.profil.
+     * returns      {string} identifiant de profil, ou chaîne vide
+     */
+    const getProfilCourant = () => {
+        const input = document.getElementById('profilCourantGOAL');
+        if (input && input.value) return input.value.trim();
+
+        const span = document.getElementById('profilTabSpe');
+        return span ? span.innerHTML.trim() : '';
+    };
+
+    const PROFIL = getProfilCourant();
+
+    // =========================================================================
+    // INDICATION DE RÉSULTAT TRONQUÉ
+    // =========================================================================
+
+    /**
+     * description Affiche ou masque l'indication en pied de liste.
+     *
+     *              Selectize ne prévoit pas de pied de liste : l'élément est
+     *              ajouté à $dropdown, après $dropdown_content, pour survivre aux
+     *              rafraîchissements d'options qui ne réécrivent que le contenu.
+     *
+     * param        {Object}    instance    - instance Selectize
+     * param        {boolean}   tronque     - true si le serveur a atteint son plafond
+     * returns      {void}
+     */
+    const majIndication = (instance, tronque) => {
+        if (!instance || !instance.$dropdown) return;
+
+        const dropdown = instance.$dropdown[0];
+        let indication = dropdown.querySelector('.rf-selectize__hint');
+
+        if (!indication) {
+            indication = document.createElement('div');
+            indication.className = 'rf-selectize__hint';
+            indication.textContent = TEXTE_AFFINER;
+            dropdown.appendChild(indication);
+        }
+
+        indication.style.display = tronque ? 'block' : 'none';
+    };
+
+    // =========================================================================
+    // PASTILLE DE COMPTAGE
+    // =========================================================================
+
+    /**
+     * description  Crée si nécessaire la pastille de comptage d'un filtre.
+     * param        {HTMLElement} wrapper - div.rf-selectize du filtre
+     * returns      {HTMLElement} l'élément compteur
+     */
+    const getCompteur = (wrapper) => {
+        let compteur = wrapper.querySelector('.rf-selectize__count');
+        if (!compteur) {
+            compteur = document.createElement('span');
+            compteur.className = 'rf-selectize__count';
+            wrapper.appendChild(compteur);
+        }
+        return compteur;
+    };
+
+    /**
+     * description  Met à jour la pastille : nombre total de valeurs sélectionnées
+     *              dans le filtre, indépendamment de la largeur du champ.
+     * param        {HTMLElement} wrapper - div.rf-selectize du filtre
+     * param        {Array<string>} valeurs - valeurs sélectionnées
+     * returns      {void}
+     */
+    const majCompteur = (wrapper, valeurs) => {
+        const compteur = getCompteur(wrapper);
+        const nombre = valeurs.length;
+
+        // Infobulle exhaustive : la troncature visuelle ne doit jamais masquer
+        // définitivement une information au survol.
+        if (nombre) {
+            wrapper.setAttribute('title', valeurs.join(SEPARATEUR));
+        } else {
+            wrapper.removeAttribute('title');
+        }
+
+        if (nombre >= SEUIL_COMPTEUR) {
+            compteur.textContent = String(nombre);
+            compteur.setAttribute('aria-label', `${nombre} valeurs sélectionnées`);
+            wrapper.classList.add('has-count');
+        } else {
+            compteur.textContent = '';
+            compteur.removeAttribute('aria-label');
+            wrapper.classList.remove('has-count');
+        }
+    };
+
+    // =========================================================================
+    // SYNCHRONISATION AVEC LE CONTRAT HISTORIQUE
+    // =========================================================================
+
+    /**
+     * description  Réplique la valeur d'un Selectize dans l'input caché lu par
+     *              appliquerFiltreRapide(), et rafraîchit la pastille.
+     * param        {string}                champ   - nom du champ GOAL
+     * param        {Array<string>|string}  valeurs - valeurs sélectionnées
+     * returns      {void}
+     */
+    const synchroniserInputCache = (champ, valeurs) => {
+        const liste = (Array.isArray(valeurs) ? valeurs : (valeurs ? [valeurs] : [])).filter(Boolean);
+        const cache = document.getElementById('RapidFilterSelectInput' + champ); if (cache) cache.value = liste.join(SEPARATEUR);
+        const wrapper = document.getElementById('RapidFilterSelectWrapper' + champ); if (wrapper) majCompteur(wrapper, liste);
+
+        if (DEBUG) console.log(`[FiltreRapide] ${champ} = "${liste.join(SEPARATEUR)}"`);
+    };
+
+    /**
+     * description Retourne l'UO actuellement sélectionnée.
+     * returns {string} valeur d'UO, ou chaîne vide
+     */
+    const getUOCourante = () => {
+        const select = document.getElementById('RapidFilterSelectizeS_UO_Pilote');
+        if (select && select.selectize) {
+            const valeur = select.selectize.getValue();
+            return Array.isArray(valeur) ? (valeur[0] || '') : (valeur || '');
+        }
+
+        const cache = document.getElementById('RapidFilterSelectInputS_UO_Pilote');
+        return cache ? cache.value : '';
+    };
+
+    /**
+     * description Vide les filtres dépendants après un changement d'UO.
+     *              clearOptions() réinitialise aussi le cache loadedSearches de
+     *              Selectize : la prochaine ouverture relancera bien une requête.
+     * returns {void}
+     */
+    const reinitialiserDependants = () => {
+        CHAMPS_DEPENDANTS_UO.forEach(champ => {
+            const select = document.getElementById('RapidFilterSelectize' + champ);
+            if (select && select.selectize) {
+                select.selectize.clear(true);
+                select.selectize.clearOptions();
+            }
+            synchroniserInputCache(champ, []);
+        });
+    };
+
+    // =========================================================================
+    // BOUTON D'APPLICATION
+    // =========================================================================
+
+    /**
+     * description  Signale visuellement que des filtres ont été modifiés sans
+     *              être encore appliqués.
+     * returns      {void}
+     */
+    const marquerFiltresModifies = () => {
+        document.querySelectorAll('.rf-selectize__apply')
+            .forEach(bouton => bouton.classList.add('is-dirty'));
+    };
+
+    /**
+     * description  Applique les filtres à la touche Entrée depuis n'importe quel
+     *              champ de saisie de la zone de filtres rapides.
+     * returns      {void}
+     */
+    const activerRaccourciEntree = () => {
+        document.addEventListener('keydown', evenement => {
+            if (evenement.key !== 'Enter') return;
+            if (!evenement.target.closest('.rf-selectize')) return;
+
+            evenement.preventDefault();
+            if (typeof appliquerFiltreRapide === 'function') {
+                appliquerFiltreRapide();
+            }
+        });
+    };
+
+    /**
+     * description  Reflète la sélection courante sur les cases à cocher de la liste.
+     *
+     *              L'état visuel ne s'appuie pas sur la classe `selected` de
+     *              Selectize : celle-ci est posée dans refreshOptions sur des noeuds
+     *              issus du renderCache, et n'est pas réappliquée de façon fiable
+     *              après un chargement distant. La classe is-checked est donc gérée
+     *              ici, à partir de instance.items qui fait autorité.
+     *
+     * param        {Object} instance - instance Selectize
+     * returns      {void}
+     */
+    const majCasesCochees = (instance) => {
+        if (!instance || !instance.$dropdown_content) return;
+
+        const contenu = instance.$dropdown_content[0];
+        if (!contenu) return;
+
+        contenu.querySelectorAll('[data-value]').forEach(ligne => {
+            const valeur = ligne.getAttribute('data-value');
+            ligne.classList.toggle('is-checked', instance.items.indexOf(valeur) !== -1);
+        });
+    };
+
+    // =========================================================================
+    // VERROU DE LARGEUR DE LA LISTE
+    // =========================================================================
+
+    /**
+     * description  Largeurs de liste déjà déterminées, indexées par nom de champ.
+     *              Vidée sur redimensionnement de la fenêtre : c'est le seul
+     *              évènement qui change légitimement la largeur d'un filtre,
+     *              les points de rupture responsive faisant passer les champs
+     *              de 220 px à la moitié de la barre.
+     * type         {Object.<string, number>}
+     */
+    const largeursListe = {};
+
+    window.addEventListener('resize', () => {
+        Object.keys(largeursListe).forEach(cle => delete largeursListe[cle]);
+    });
+
+    /**
+     * description  Contraint la liste déroulante à la largeur du champ.
+     *
+     *              xwikiSelectize configure dropdownParent: 'body' : la liste est
+     *              déplacée hors de .selectize-control, donc hors de portée des
+     *              règles de largeur du conteneur et du `box-sizing: border-box`
+     *              que la bibliothèque n'applique qu'aux descendants du contrôle.
+     *              Selectize lui pose bien une largeur inline en la positionnant,
+     *              mais sans verrou : une option plus longue que le champ repousse
+     *              le bloc.
+     *
+     *              La mesure est prise sur le CONTENEUR du filtre et non sur le
+     *              contrôle Selectize, et elle n'est prise qu'une fois. Le
+     *              contrôle est reconstruit à chaque sélection ; le remesurer
+     *              faisait varier la largeur de la liste d'un clic à l'autre.
+     *              Le conteneur, lui, est un élément flex de largeur fixe : sa
+     *              largeur ne dépend ni du contenu du champ ni de la liste.
+     *
+     *              Les propriétés sont posées en style inline avec la priorité
+     *              !important : c'est le seul niveau qu'aucune feuille tierce ni
+     *              le repositionnement de Selectize ne peuvent reprendre.
+     *
+     * param        {Object} instance - instance Selectize
+     * param        {string} champ    - nom du champ GOAL
+     * returns      {void}
+     */
+    const verrouillerLargeurListe = (instance, champ) => {
+        if (!instance || !instance.$dropdown) return;
+
+        const listeDOM = instance.$dropdown[0];
+        if (!listeDOM) return;
+
+        // Mesure unique, conservée pour toutes les ouvertures suivantes
+        if (!largeursListe[champ]) {
+            const conteneur = document.getElementById('RapidFilterSelectWrapper' + champ);
+            const mesure = conteneur ? conteneur.getBoundingClientRect().width : 0;
+
+            // Une mesure nulle signifie un conteneur encore masqué : on n'enregistre
+            // rien, la prochaine ouverture retentera.
+            if (!mesure) return;
+            largeursListe[champ] = mesure;
+        }
+
+        const largeur = largeursListe[champ] + 'px';
+
+        listeDOM.style.setProperty('box-sizing', 'border-box', 'important');
+        listeDOM.style.setProperty('width', largeur, 'important');
+        listeDOM.style.setProperty('max-width', largeur, 'important');
+        listeDOM.style.setProperty('min-width', '0', 'important');
+        listeDOM.style.setProperty('overflow', 'hidden', 'important');
+
+        const contenu = listeDOM.querySelector('.selectize-dropdown-content');
+        if (contenu) {
+            contenu.style.setProperty('box-sizing', 'border-box', 'important');
+            contenu.style.setProperty('width', '100%', 'important');
+            contenu.style.setProperty('max-width', '100%', 'important');
+            contenu.style.setProperty('overflow-x', 'auto', 'important');
+        }
+    };
+
+    // =========================================================================
+    // INITIALISATION D'UN FILTRE
+    // =========================================================================
+
+    /**
+     * description  Initialise un Selectize de filtre rapide en mode distant.
+     * param        {Object}            $ - instance jQuery fournie par RequireJS
+     * param        {HTMLSelectElement} select - élément généré par la macro Velocity
+     * returns      {void}
+     */
+    const initFiltre = ($, select) => {
+        const champ = select.dataset.champ;
+        const maxItems = parseInt(select.dataset.maxItems, 10) || 0;
+        const valInit = (select.dataset.initValue || '')
+            .split(',')
+            .map(valeur => valeur.trim())
+            .filter(Boolean);
+
+        const $el = $(select);
+        $el.data('loadNum', 0);
+
+        // Le plugin remove_button est incompatible avec le mode mono-sélection
+        // sous jQuery 3 (il s'appuie sur $input.context, supprimé depuis).
+        const plugins = (maxItems === 1) ? [] : ['remove_button'];
+
+        /**
+        * Étiquette permanente du filtre. Rendue par la macro Velocity : le bloc
+        * ci-dessous n'est qu'un repli défensif si le wrapper n'en porte pas.
+        * Le libellé provient de data-libelle et non de data-placeholder, les
+        * deux textes étant désormais distincts.
+        */
+        const wrapper = document.getElementById('RapidFilterSelectWrapper' + champ);
+        if (wrapper && !wrapper.querySelector('.rf-selectize__label')) {
+            const etiquette = document.createElement('span');
+            etiquette.className = 'rf-selectize__label';
+            etiquette.textContent = select.dataset.libelle || select.dataset.placeholder || '';
+            wrapper.insertBefore(etiquette, wrapper.firstChild);
+        }
+
+        $el.xwikiSelectize({
+            valueField: 'value',
+            labelField: 'label',
+            searchField: ['label', 'value', 'nom', 'prenom'],
+            placeholder: select.dataset.placeholder || '',
+            maxItems: (maxItems === 0) ? null : maxItems,
+            maxOptions: MAX_OPTIONS,
+            plugins: plugins,
+            persist: true,
+            create: false,
+            copyClassesToDropdown: true,
+            loadThrottle: DELAI_RECHERCHE,
+
+            // Chargement intégral dès l'ouverture de la liste : Selectize ne
+            // déclenche load() que sur frappe clavier, sauf si preload vaut
+            // 'focus'. Le volume est borné côté serveur par le périmètre du
+            // profil, pas par une pagination.
+            preload: 'focus',
+
+            /**
+             * Les valeurs cochées restent affichées dans la liste : c'est ce qui
+             * permet la lecture verticale de la sélection et le décochage d'un
+             * clic. hideSelected est à true par défaut en mode multi.
+             */
+            hideSelected: false,
+
+            // La liste reste ouverte après un clic en choix multiple : on coche
+            // plusieurs valeurs à la suite sans avoir à la rouvrir. En choix
+            // unique il n'y a rien à enchaîner, et la laisser ouverte masquerait
+            // le champ qu'on vient de renseigner.
+            closeAfterSelect: (maxItems === 1),
+
+            copyClassesToDropdown: true,
+
+            render: {
+
+                /**
+                 * description Rendu d'une valeur sélectionnée, dans le champ.
+                 *
+                 *              DOIT retourner une CHAÎNE : le plugin
+                 *              remove_button applique String.search() sur ce
+                 *              résultat, et le rendu par défaut de
+                 *              xwikiSelectize retourne un noeud DOM.
+                 *
+                 * param        {Object}    item - option {value, label, badge, nom, prenom}
+                 * param        {Function}  escape - échappement HTML fourni par Selectize
+                 * returns      {string}    fragment HTML
+                 */
+                item: function (item, escape) {
+                    const texte = item.label || item.value;
+
+                    if (!item.badge) {
+                        return '<div class="item" title="' + escape(texte) + '">'
+                            + escape(texte)
+                            + '</div>';
+                    }
+
+                    const infobulle = texte + ' (' + item.value + ')';
+                    return '<div class="item rf-item" title="' + escape(infobulle) + '">'
+                        + '<span class="rf-item__badge">' + escape(item.badge) + '</span>'
+                        + '</div>';
+                },
+
+                /**
+                 * description  Rendu d'une ligne de la liste déroulante.
+                 *
+                 *              Deux rendus selon le mode du filtre :
+                 *              - choix multiple : une case à cocher précède le
+                 *                libellé, l'état est piloté par la classe
+                 *                is-checked posée par majCasesCochees().
+                 *              - choix unique (maxItems === 1) : pas de case, une
+                 *                coche discrète marque la valeur courante à
+                 *                droite de la ligne. Une case à cocher annoncerait
+                 *                un cumul possible, et l'interception du clic qui
+                 *                permet le décochage est de toute façon désactivée
+                 *                dans ce mode.
+                 *
+                 * param        {Object}    item    - option {value, label, badge, nom, prenom}
+                 * param        {Function}  escape  - échappement HTML fourni par Selectize
+                 * returns      {string}    fragment HTML
+                 */
+                option: function (item, escape) {
+                    const texte = item.label || item.value;
+                    const infobulle = item.badge ? (texte + ' (' + item.value + ')') : texte;
+
+                    let contenu = '<span class="rf-option__label">' + escape(texte) + '</span>';
+                    if (item.badge) {
+                        contenu += '<span class="rf-option__badge">' + escape(item.badge) + '</span>';
+                    }
+
+                    if (maxItems === 1) {
+                        return '<div class="option rf-option rf-option--mono" title="' + escape(infobulle) + '">'
+                            + contenu
+                            + '<span class="rf-option__marque" aria-hidden="true"></span>'
+                            + '</div>';
+                    }
+
+                    return '<div class="option rf-option" title="' + escape(infobulle) + '">'
+                        + '<span class="rf-option__check" aria-hidden="true"></span>'
+                        + contenu
+                        + '</div>';
+                },
+            },
+
+            /**
+             * description  Recherche distante. Les réponses arrivées dans le
+             *              désordre sont abandonnées via le compteur loadNum.
+             * param        {string} query      - saisie utilisateur, vide à l'ouverture
+             * param        {Function} callback - à appeler avec les options trouvées
+             */
+            load: function (query, callback) {
+                const instance = this;
+                const saisie = (query || '').trim();
+
+                const loadNum = $el.data('loadNum') + 1;
+                $el.data('loadNum', loadNum);
+
+                const parametres = [
+                    'champ=' + encodeURIComponent(champ),
+                    'query=' + encodeURIComponent(saisie),
+                    'profil=' + encodeURIComponent(PROFIL),
+                    'loadNum=' + loadNum
+                ];
+
+                if (CHAMPS_DEPENDANTS_UO.indexOf(champ) !== -1) {
+                    parametres.push('uo=' + encodeURIComponent(getUOCourante()));
+                }
+
+                fetch(`${ENDPOINT}&${parametres.join('&')}`, { credentials: 'same-origin' })
+                    .then(reponse => reponse.json())
+                    .then(json => {
+                        // Réponse obsolète : une saisie plus récente est en cours
+                        if (json.loadNum !== $el.data('loadNum')) {
+                            callback();
+                            return;
+                        }
+                        if (json.error) {
+                            console.warn(`[FiltreRapide] ${champ} : ${json.error}`);
+                            callback();
+                            return;
+                        }
+
+                        $el.data('tronque', !!json.partiel);
+                        callback(json.data || []);
+
+                        // Après le rendu des options, pour que le pied reste en
+                        // dernière position dans la liste.
+                        window.requestAnimationFrame(() => {
+                            majIndication(instance, !!json.partiel);
+                            majCasesCochees(instance);
+                            verrouillerLargeurListe(instance, champ);
+                        });
+                    })
+                    .catch(erreur => {
+                        console.error(`[FiltreRapide] Échec du chargement de ${champ}`, erreur);
+                        callback();
+                    });
+            },
+
+            /**
+             * description  Réinjecte les valeurs déjà appliquées (issues de l'URL).
+             *              setValue() est appelé en mode silencieux : sans cela,
+             *              onChange se déclencherait au chargement et provoquerait
+             *              une redirection en boucle sur le filtre UO.
+             */
+            onInitialize: function () {
+                if (!valInit.length) return;
+
+                // À ce stade seul le login est connu : l'identité complète
+                // (nom, prénom) arrivera au premier chargement distant et
+                // remplacera ces options provisoires.
+                valInit.forEach(valeur => this.addOption({ value: valeur, label: valeur }));
+                this.setValue(valInit, true);
+
+                const wrapper = document.getElementById('RapidFilterSelectWrapper' + champ);
+                if (wrapper) majCompteur(wrapper, valInit);
+            },
+
+            /**
+             * description  Répercute la sélection sur l'input caché.
+             * param        {Array<string>|string} valeurs - sélection courante
+             */
+            onChange: function (valeurs) {
+                synchroniserInputCache(champ, valeurs);
+                majCasesCochees(this);
+
+                if (champ === 'S_UO_Pilote') {
+                    // Le périmètre des destinataires / contributeurs / approbateurs
+                    // est recalculé côté serveur à partir de FtrUOPilote : on
+                    // recharge immédiatement.
+                    reinitialiserDependants();
+                    if (typeof appliquerFiltreRapideUOPilote === 'function') {
+                        appliquerFiltreRapideUOPilote();
+                    }
+                    return;
+                }
+
+                marquerFiltresModifies();
+            },
+
+            onDropdownOpen: function () {
+                majCasesCochees(this);
+                verrouillerLargeurListe(this, champ);
+            },
+            /**
+             * description Au blur, le champ revient en début de liste.
+             */
+            onBlur: function () {
+                const champDOM = this.$control && this.$control[0];
+                if (champDOM) champDOM.scrollLeft = 0;
+            }
+        });
+
+        // ---------------------------------------------------------------------
+        // Décochage au clic sur une option déjà sélectionnée
+        // ---------------------------------------------------------------------
+        /**
+         * Bascule d'une ligne au clic.
+         *
+         * Selectize écoute mousedown ET click sur $dropdown : neutraliser le seul
+         * mousedown laissait le click rappeler onOptionSelect, qui réinsérait la
+         * valeur qu'on venait de retirer. Les deux événements sont donc interceptés
+         * en phase de capture, pour passer avant les gestionnaires jQuery de la
+         * bibliothèque.
+         */
+        const instance = select.selectize;
+        if (instance && maxItems !== 1) {
+            const dropdown = instance.$dropdown[0];
+            let valeurEnCours = null;
+
+            const intercepter = (evenement) => {
+                const ligne = evenement.target.closest('[data-value]');
+                if (!ligne || !dropdown.contains(ligne)) return;
+
+                const valeur = ligne.getAttribute('data-value');
+
+                if (evenement.type === 'mousedown') {
+                    valeurEnCours = valeur;
+
+                    // Valeur déjà retenue : le clic vaut retrait
+                    if (instance.items.indexOf(valeur) !== -1) {
+                        evenement.preventDefault();
+                        evenement.stopPropagation();
+                        instance.removeItem(valeur);
+                        majCasesCochees(instance);
+                    }
+                    // Sinon on laisse Selectize procéder à l'ajout
+                    return;
+                }
+
+                // Le click qui suit est neutralisé : le traitement a eu lieu au mousedown
+                if (valeurEnCours === valeur) {
+                    evenement.preventDefault();
+                    evenement.stopPropagation();
+                    valeurEnCours = null;
+                }
+            };
+
+            dropdown.addEventListener('mousedown', intercepter, true);
+            dropdown.addEventListener('click', intercepter, true);
+        }
+
+        /**
+        * Clic sur une valeur du champ : ouvre la liste au lieu de sélectionner
+        * l'item. Sans cela il fallait viser l'espace libre entre les badges.
+        * Le bouton de retrait garde son comportement propre.
+        */
+        instance.$control.on('mousedown', '.item', function (evenement) {
+            if (evenement.target.closest('.remove')) return;
+
+            evenement.preventDefault();
+            evenement.stopPropagation();
+
+            instance.focus();
+            if (!instance.isOpen) instance.open();
+        });
+
+        /**
+         * Verrou permanent sur la largeur de la liste.
+         *
+         * Selectize repositionne sa liste à chaque rafraîchissement d'options,
+         * donc à chaque sélection, et écrit alors une largeur en style inline via
+         * jQuery. Or affecter `element.style.width` efface la priorité !important
+         * posée précédemment : notre verrou saute silencieusement, et la largeur
+         * repart sur la mesure que Selectize vient de prendre.
+         *
+         * L'observateur surveille l'attribut style de la liste et repose la
+         * largeur mémorisée dès qu'un tiers y touche. Le drapeau evite la boucle :
+         * nos propres écritures ne doivent pas se redéclencher.
+         */
+        if (instance && instance.$dropdown) {
+            const listeDOM = instance.$dropdown[0];
+            let repositionEnCours = false;
+
+            const observateur = new MutationObserver(() => {
+                if (repositionEnCours) return;
+
+                repositionEnCours = true;
+                verrouillerLargeurListe(instance, champ);
+
+                // Libération à la frame suivante : les écritures de Selectize
+                // arrivent groupées, inutile de réagir à chacune.
+                window.requestAnimationFrame(() => { repositionEnCours = false; });
+            });
+
+            observateur.observe(listeDOM, {
+                attributes: true,
+                attributeFilter: ['style']
+            });
+        }
+
+        if (DEBUG) {
+            console.log(`[FiltreRapide] ${champ} initialisé `
+                + `(maxItems=${maxItems || 'illimité'})`);
+        }
+    };
+
+    // =========================================================================
+    // AMORÇAGE
+    // =========================================================================
+
+    require(['jquery', 'xwiki-selectize'], function ($) {
+        const selects = Array.from(document.querySelectorAll('select.rf-selectize__select'));
+        if (!selects.length) return;
+
+        // Le filtre UO doit être initialisé en premier : les filtres dépendants
+        // lisent sa valeur au moment de construire leur requête.
+        selects.sort((a, b) => {
+            const poids = element => (element.dataset.champ === 'S_UO_Pilote' ? 0 : 1);
+            return poids(a) - poids(b);
+        });
+
+        selects.forEach(select => initFiltre($, select));
+
+        activerRaccourciEntree();
+
+        if (DEBUG) console.log(`[FiltreRapide] ${selects.length} filtre(s) initialisé(s)`);
+    });
+})();
