@@ -12,6 +12,10 @@
    (.rf-selectize__label) et du champ lui-même. Le filtre Favoris suit la même
    composition : étiquette, puis champ de même gabarit.
 
+   Le champ porte une loupe ancrée à gauche (.rf-selectize__search) et une zone
+   de saisie visuellement distincte des badges, pour que la fonction de
+   recherche reste identifiable même lorsque des valeurs occupent la ligne.
+
    Comportement responsive :
      > 1280 px  : filtres alignés sur une ligne
      ≤ 1280 px  : filtres à deux par ligne, bascules encore côte à côte
@@ -38,11 +42,13 @@
     --rf-border: #ccc;
     --rf-border-soft: #e2e7ef;
     --rf-ink-soft: #5a6b85;
+    --rf-field-soft: #f2f5f9;
     --rf-width: 220px;
     --rf-height: 35px;
     --rf-radius: 4px;
     --rf-gap: 8px;
     --rf-count-space: 32px;
+    --rf-search-space: 28px;
 }
 
 /* Alignement sur les jetons du design system s'ils sont présents */
@@ -241,6 +247,9 @@
  * Hauteur constante y compris au focus : aucune superposition, aucun décalage
  * du reste de la page. Les valeurs qui ne tiennent pas sont atteintes par
  * défilement horizontal une fois le champ actif.
+ *
+ * Le retrait à gauche réserve la place de la loupe, posée en superposition dans
+ * le conteneur.
  */
 .rf-selectize .selectize-input {
     /* Positionnement */
@@ -253,7 +262,7 @@
     gap: 3px;
     width: 100%;
     height: var(--rf-height);
-    padding: 0 8px;
+    padding: 0 8px 0 var(--rf-search-space);
     overflow: hidden;
 
     /* Typographie */
@@ -331,6 +340,72 @@
     border-color: var(--rf-accent);
 }
 
+/* --------------------------------------------------------------------------
+   3.1 Loupe de la zone de saisie
+   -------------------------------------------------------------------------- */
+
+/**
+ * Ancrée dans le CONTENEUR et non dans le champ : le champ défile
+ * horizontalement dès que les badges dépassent, la loupe doit rester fixe.
+ * Elle désigne la fonction de recherche même lorsque des valeurs occupent
+ * toute la ligne - c'est ce qui manquait pour comprendre qu'on peut saisir
+ * entre les badges.
+ *
+ * Le repère vertical est le bas du conteneur : l'étiquette ayant une hauteur
+ * propre, un positionnement depuis le haut ferait flotter la loupe au-dessus
+ * du champ.
+ *
+ * Tracé en CSS - cercle plus manche - donc aucune dépendance à une police
+ * d'icônes et un rendu net à toute densité d'écran.
+ */
+.rf-selectize__search {
+    /* Positionnement */
+    position: absolute;
+    bottom: 12px;
+    left: 9px;
+    z-index: 5;
+
+    /* Box-model */
+    box-sizing: border-box;
+    width: 11px;
+    height: 11px;
+
+    /* Visuel */
+    border: 1.5px solid #8a97ab;
+    border-radius: 50%;
+
+    /* Divers */
+    pointer-events: none;
+    transition: border-color 0.15s ease;
+}
+
+.rf-selectize__search::after {
+    /* Positionnement */
+    position: absolute;
+    top: 8px;
+    left: 7px;
+
+    /* Box-model */
+    content: '';
+    width: 5px;
+    height: 1.5px;
+
+    /* Visuel */
+    background: #8a97ab;
+    transform: rotate(45deg);
+    transform-origin: left center;
+    transition: background 0.15s ease;
+}
+
+/* La loupe s'accentue avec le champ */
+.rf-selectize:focus-within .rf-selectize__search {
+    border-color: var(--rf-primary);
+}
+
+.rf-selectize:focus-within .rf-selectize__search::after {
+    background: var(--rf-primary);
+}
+
 /* ==========================================================================
    4. ITEMS SÉLECTIONNÉS
    ========================================================================== */
@@ -389,10 +464,16 @@
     background: rgba(0, 0, 0, 0.15);
 }
 
+/* --------------------------------------------------------------------------
+   4.1 Zone de saisie interne
+   -------------------------------------------------------------------------- */
+
 /**
- * Champ de saisie interne. Réduit à zéro au repos dès qu'une valeur est
- * présente : il volerait sinon la place des items sur l'unique ligne
- * disponible. Il reprend une largeur exploitable au focus.
+ * Le champ de saisie était auparavant réduit à zéro dès qu'une valeur était
+ * retenue : rien n'indiquait alors qu'on pouvait écrire, et sa position variait
+ * selon le nombre de badges. Il conserve désormais une largeur minimale et un
+ * fond légèrement teinté, qui le détachent des badges bleus et le désignent
+ * comme une zone d'écriture.
  */
 .rf-selectize .selectize-input > input {
     /* Box-model */
@@ -401,18 +482,52 @@
 
     /* Typographie */
     font-size: 13px;
+
+    /* Visuel */
+    background: transparent;
+    border-radius: 3px;
+
+    /* Divers */
+    transition: background 0.15s ease;
 }
 
+/* Au repos avec des valeurs : un rectangle discret, cliquable */
 .rf-selectize .selectize-input.has-items:not(.focus) > input {
-    width: 0 !important;
-    min-width: 0 !important;
-    padding: 0 !important;
-    opacity: 0;
+    /* Box-model */
+    flex: 0 0 auto;
+    width: auto !important;
+    min-width: 24px !important;
+    padding: 0 4px !important;
+
+    /* Visuel */
+    background: var(--rf-field-soft);
+    opacity: 1;
 }
 
+/* Au focus : la zone s'ouvre et prend la place restante */
 .rf-selectize .selectize-input.focus > input {
+    /* Box-model */
     flex: 0 0 100%;
-    min-width: 80px;
+    min-width: 90px;
+    padding: 0 6px;
+
+    /* Visuel */
+    background: var(--rf-field-soft);
+    opacity: 1;
+}
+
+/**
+ * Libellé de saisie, posé par le module JS quand des valeurs sont retenues.
+ * Distinct du placeholder d'origine : celui-ci nomme le filtre, celui-là
+ * nomme l'action.
+ */
+.rf-selectize .selectize-input > input::placeholder {
+    /* Typographie */
+    font-size: 12px;
+    font-style: italic;
+
+    /* Visuel */
+    color: #8a97ab;
     opacity: 1;
 }
 
@@ -754,7 +869,7 @@
     flex: 0 1 auto;
     min-width: 0;
     padding: 0;
-    
+
     /* Typographie */
     font-family: inherit;
     font-size: 13px;
@@ -762,7 +877,7 @@
     white-space: nowrap;
     text-overflow: ellipsis;
     overflow: hidden;
-    
+
     /* Visuel */
     background: none;
     color: inherit;
@@ -973,7 +1088,7 @@
     /* Typographie */
     font-size: 14px;
     line-height: 1.35;
-    
+
     /* Visuel */
     color: var(--rf-ink-soft);
 }
@@ -1035,6 +1150,9 @@
 
 @media (prefers-reduced-motion: reduce) {
     .rf-selectize .selectize-input,
+    .rf-selectize .selectize-input > input,
+    .rf-selectize__search,
+    .rf-selectize__search::after,
     .rf-favoris #GOALStyleName,
     .rf-selectize__apply,
     .rf-option__check {
