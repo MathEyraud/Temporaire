@@ -1,0 +1,1043 @@
+/* ==========================================================================
+   FILTRES RAPIDES - MODE SELECTIZE
+   Échéancier GOAL PDE.
+
+   Structure de la barre (#div_filtre_rapide) :
+     .rf-toolbar
+       ├── .rf-toolbar__filters   filtres + bouton Appliquer  - une seule ligne
+       ├── .rf-toolbar__toggles   bascules                    - côte à côte
+       └── .rf-toolbar__actions   Créer / Filtres / menu "…"  - jamais dissociés
+
+   Chaque filtre est composé d'une étiquette permanente au-dessus du champ
+   (.rf-selectize__label) et du champ lui-même. Le filtre Favoris suit la même
+   composition : étiquette, puis champ de même gabarit.
+
+   Comportement responsive :
+     > 1280 px  : filtres alignés sur une ligne
+     ≤ 1280 px  : filtres à deux par ligne, bascules encore côte à côte
+     ≤ 700 px   : filtres empilés, bascules empilées
+
+   Système de couleurs Naval Group.
+   ========================================================================== */
+
+/* ==========================================================================
+   0. VARIABLES
+   ========================================================================== */
+
+/**
+ * xwikiSelectize configure dropdownParent: 'body' : la liste déroulante est
+ * déplacée hors de .rf-selectize. L'ensemble des jetons est donc déclaré au
+ * niveau :root, sans quoi var(--rf-primary) et var(--rf-radius) restent non
+ * résolues dans le dropdown et la liste retombe sur le style Selectize par
+ * défaut - c'est de là que venait sa bordure épaisse.
+ */
+:root {
+    --rf-primary: #1f4492;
+    --rf-primary-hover: #004f9d;
+    --rf-accent: #0062c7;
+    --rf-border: #ccc;
+    --rf-border-soft: #e2e7ef;
+    --rf-ink-soft: #5a6b85;
+    --rf-width: 220px;
+    --rf-height: 35px;
+    --rf-radius: 4px;
+    --rf-gap: 8px;
+    --rf-count-space: 32px;
+}
+
+/* Alignement sur les jetons du design system s'ils sont présents */
+.rf-toolbar,
+.rf-selectize {
+    --rf-primary: var(--ng-primary, #1f4492);
+    --rf-accent: var(--ng-accent, #0062c7);
+}
+
+/* ==========================================================================
+   1. BARRE DE FILTRES - TROIS GROUPES
+   ========================================================================== */
+
+/**
+ * flex-end et non center : les filtres portent une étiquette au-dessus du
+ * champ, les bascules et les actions n'en ont pas. Un alignement centré
+ * décalerait les trois groupes les uns par rapport aux autres ; aligner sur
+ * le bas fait coïncider la ligne de base de tous les contrôles.
+ */
+.rf-toolbar {
+    /* Box-model */
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px var(--rf-gap);
+    width: 100%;
+}
+
+/**
+ * Groupe 1 - filtres. nowrap par défaut : tant que la place le permet, les
+ * filtres restent strictement alignés.
+ */
+.rf-toolbar__filters {
+    /* Box-model */
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    gap: var(--rf-gap);
+    min-width: 0;
+}
+
+/**
+ * Groupe 2 - bascules. Les paires interrupteur + libellé sont encapsulées dans
+ * .rf-toolbar__toggle par le template : sans cela, un retour à la ligne pouvait
+ * séparer un interrupteur de son libellé.
+ */
+.rf-toolbar__toggles {
+    /* Box-model */
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    height: var(--rf-height);
+    padding-left: 16px;
+    /* Visuel */
+    border-left: 1px solid var(--rf-border-soft);
+}
+
+.rf-toolbar__toggle {
+    /* Box-model */
+    display: flex;
+    flex: 1;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+}
+
+.rf-toolbar__toggles .rf-toolbar__toggle .Goalswitch {
+    margin-top: 0px !important;
+    padding: 0px !important;
+    top: 0px !important;
+    bottom: 0px !important;
+    margin-bottom: 0px !important;
+}
+
+.rf-toggle {
+    /* Box-model */
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 6px;
+    /* Typographie */
+    white-space: nowrap;
+}
+
+.rf-toggle__label {
+    /* Typographie */
+    font-size: 13px;
+    line-height: 1;
+}
+
+/**
+ * Groupe 3 - actions. Poussé à droite par flex: 1 + justify-content plutôt que
+ * par float, qui sortait le bloc du flux et empêchait tout alignement fiable.
+ */
+.rf-toolbar__actions {
+    /* Box-model */
+    display: flex;
+    flex: 1;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 5px;
+    height: var(--rf-height);
+}
+
+.rf-toolbar__actions > button,
+.rf-toolbar__actions > .dropdown {
+    flex: 0 0 auto;
+}
+
+/**
+ * Gabarit commun à tous les boutons de la barre. Seules la hauteur, la
+ * typographie et l'arrondi sont imposés : les couleurs restent celles du
+ * design system (btn-naval, btn-primary), qui ne sont pas redéfinies ici.
+ */
+.rf-toolbar__actions > button,
+.rf-toolbar__actions > .dropdown > button {
+    /* Box-model */
+    height: var(--rf-height);
+    padding: 0 14px;
+
+    /* Typographie */
+    font-size: 13px;
+    line-height: 1;
+    white-space: nowrap;
+
+    /* Visuel */
+    border-radius: var(--rf-radius);
+}
+
+/* ==========================================================================
+   2. CONTENEUR D'UN FILTRE - LARGEUR FIXE
+   ========================================================================== */
+
+/**
+ * Largeur fixe, et non min-width/max-width : Selectize dimensionne son wrapper
+ * sur le style inline du <select> d'origine, donc sans contrainte ferme le
+ * contrôle s'élargit au fil des sélections et fait sauter la barre.
+ */
+.rf-selectize,
+.rf-favoris {
+    /* Positionnement */
+    position: relative;
+    /* Box-model */
+    display: block;
+    flex: 0 0 var(--rf-width);
+    width: var(--rf-width);
+    height: auto;
+    vertical-align: top;
+}
+
+.rf-selectize .selectize-control {
+    /* Box-model */
+    width: 100%;
+    height: var(--rf-height);
+    margin: 0;
+}
+
+/* Le <select> natif reste masqué tant que Selectize n'a pas pris la main */
+.rf-selectize__select:not(.selectized) {
+}
+
+/**
+ * Étiquette permanente. Le placeholder s'efface dès qu'une valeur est retenue :
+ * sans étiquette, un filtre rempli devient anonyme. Hauteur et marge identiques
+ * pour tous les filtres, y compris Favoris, faute de quoi les champs ne
+ * s'alignent plus horizontalement.
+ */
+.rf-selectize__label {
+    /* Box-model */
+    display: block;
+    max-width: 100%;
+    margin-bottom: 3px;
+
+    /* Typographie */
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 14px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+
+    /* Visuel */
+    color: var(--rf-ink-soft);
+}
+
+/* ==========================================================================
+   3. CHAMP - UNE SEULE LIGNE, EN TOUTES CIRCONSTANCES
+   ========================================================================== */
+
+/**
+ * Hauteur constante y compris au focus : aucune superposition, aucun décalage
+ * du reste de la page. Les valeurs qui ne tiennent pas sont atteintes par
+ * défilement horizontal une fois le champ actif.
+ */
+.rf-selectize .selectize-input {
+    /* Positionnement */
+    position: relative;
+
+    /* Box-model */
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 3px;
+    width: 100%;
+    height: var(--rf-height);
+    padding: 0 8px;
+    overflow: hidden;
+
+    /* Typographie */
+    font-size: 13px;
+    line-height: 1.4;
+    white-space: nowrap;
+
+    /* Visuel */
+    background: #fff;
+    border: 1px solid var(--rf-border);
+    border-radius: var(--rf-radius);
+    box-shadow: none;
+
+    /* Divers */
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+/**
+ * Focus : bordure accentuée et halo d'un pixel. Le halo de 2 px donnait au
+ * champ ouvert l'aspect d'une bordure épaisse, incohérent avec le trait de
+ * 1 px de la liste déroulante posée juste en dessous.
+ *
+ * La barre de défilement horizontale est masquée, et non simplement amincie.
+ * Le champ est un conteneur flex à hauteur fixe centré verticalement : une
+ * barre visible, même de 4 px, ampute la boite de contenu d'autant, et le
+ * centrage recalcule alors la position du texte vers le haut. C'est ce qui
+ * produisait le décalage visible dès qu'on saisissait dans un champ dont le
+ * contenu dépasse - typiquement l'UO pilote, où la valeur retenue et le texte
+ * frappé cohabitent sur une seule ligne. Le défilement reste possible : le
+ * curseur entraine la vue à la frappe, et la molette horizontale fonctionne.
+ */
+.rf-selectize .selectize-input.focus {
+    /* Box-model */
+    overflow-x: auto;
+
+    /* Visuel */
+    border-color: var(--rf-primary);
+    box-shadow: 0 0 0 1px rgba(31, 68, 146, 0.18);
+
+    /* Divers */
+    cursor: text;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.rf-selectize .selectize-input.focus::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+}
+
+/* Réserve la place du compteur lorsqu'il est affiché */
+.rf-selectize.has-count .selectize-input {
+    padding-right: var(--rf-count-space);
+}
+
+/**
+ * Liste ouverte : le champ et la liste ne forment plus qu'un seul bloc. Le halo
+ * est retiré, sans quoi il se superposerait au trait supérieur de la liste et
+ * doublerait visuellement l'épaisseur de la bordure.
+ */
+.rf-selectize .selectize-input.dropdown-active {
+    /* Visuel */
+    border-color: var(--rf-primary);
+    border-bottom-color: transparent;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    box-shadow: none;
+}
+
+/* Chargement en cours côté serveur */
+.rf-selectize .selectize-control.loading .selectize-input {
+    background-image: none;
+    border-color: var(--rf-accent);
+}
+
+/* ==========================================================================
+   4. ITEMS SÉLECTIONNÉS
+   ========================================================================== */
+
+.rf-selectize .selectize-input > .item {
+    /* Box-model */
+    flex: 0 0 auto;
+    max-width: 100%;
+    padding: 2px 6px;
+    /* Typographie */
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    /* Visuel */
+    background: var(--rf-primary);
+    color: #fff;
+    border-radius: 3px;
+}
+
+.rf-selectize .selectize-input > .item.rf-item {
+    /* Box-model */
+    display: inline-flex;
+    align-items: baseline;
+    max-width: 160px;
+}
+
+.rf-item__label {
+    /* Box-model */
+    flex: 0 1 auto;
+    min-width: 0;
+
+    /* Typographie */
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
+/* Bouton de retrait (plugin remove_button, multi-sélection uniquement) */
+.rf-selectize .selectize-input > .item .remove {
+    /* Box-model */
+    padding: 0 4px;
+    margin-left: 4px;
+
+    /* Typographie */
+    text-decoration: none;
+
+    /* Visuel */
+    color: rgb(0, 0, 0);
+    border-left: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.rf-selectize .selectize-input > .item .remove:hover {
+    color: #fff;
+    background: rgba(0, 0, 0, 0.15);
+}
+
+/**
+ * Champ de saisie interne. Réduit à zéro au repos dès qu'une valeur est
+ * présente : il volerait sinon la place des items sur l'unique ligne
+ * disponible. Il reprend une largeur exploitable au focus.
+ */
+.rf-selectize .selectize-input > input {
+    /* Box-model */
+    flex: 0 0 auto;
+    min-width: 0;
+
+    /* Typographie */
+    font-size: 13px;
+}
+
+.rf-selectize .selectize-input.has-items:not(.focus) > input {
+    width: 0 !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+    opacity: 0;
+}
+
+.rf-selectize .selectize-input.focus > input {
+    flex: 0 0 100%;
+    min-width: 80px;
+    opacity: 1;
+}
+
+/* ==========================================================================
+   5. FILTRE FAVORIS - MÊME GABARIT QUE LES AUTRES FILTRES
+   ========================================================================== */
+
+/**
+ * Le champ Favoris n'est pas un Selectize : c'est un input en lecture seule
+ * doublé d'une liste maison. Il reçoit ici le gabarit exact des autres filtres
+ * - hauteur, bordure, arrondi, typographie, focus - pour que la barre présente
+ * une composition homogène.
+ *
+ * !important est ici nécessaire et non défensif : le gabarit était auparavant
+ * porté par un style inline `height: 35px !important`, ce qui prouve qu'une
+ * feuille GOAL globale impose sa propre hauteur aux input[type=text] avec la
+ * même arme. Retirer le style inline sans reprendre le !important rendait la
+ * main à cette règle, et le champ redevenait plus haut que les Selectize.
+ */
+.rf-favoris #GOALStyleName {
+    /* Box-model */
+    box-sizing: border-box !important;
+    width: 100% !important;
+    height: var(--rf-height) !important;
+    min-height: var(--rf-height) !important;
+    max-height: var(--rf-height) !important;
+    padding: 0 8px !important;
+    margin: 0 !important;
+
+    /* Typographie */
+    font-size: 13px !important;
+    line-height: 1.4 !important;
+    text-overflow: ellipsis;
+
+    /* Visuel */
+    background: #fff !important;
+    border: 1px solid var(--rf-border) !important;
+    border-radius: var(--rf-radius) !important;
+    box-shadow: none !important;
+    color: inherit;
+
+    /* Divers */
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.rf-favoris #GOALStyleName:focus,
+.rf-favoris #GOALStyleName:hover {
+    border-color: var(--rf-primary) !important;
+    box-shadow: 0 0 0 1px rgba(31, 68, 146, 0.18) !important;
+    outline: none !important;
+}
+
+/**
+ * Liste des favoris. Positionnée explicitement sous le champ : l'ajout de
+ * l'étiquette au-dessus décale le point d'ancrage, et un positionnement hérité
+ * exprimé en pixels depuis le haut du conteneur ne serait plus juste.
+ */
+.rf-favoris .RapidFilterMySelectOptions {
+    /* Positionnement */
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 1000;
+
+    /* Box-model */
+    box-sizing: border-box;
+    width: 100%;
+    max-height: 300px;
+    margin-top: 0;
+    overflow-y: auto;
+
+    /* Visuel */
+    background: #fff;
+    border: 1px solid var(--rf-primary);
+    border-top: none;
+    border-radius: 0 0 var(--rf-radius) var(--rf-radius);
+    box-shadow: 0 6px 16px rgba(31, 68, 146, 0.15);
+}
+
+.rf-favoris .RapidFilterMySelectOptionsUL {
+    /* Box-model */
+    margin: 0;
+    list-style: none;
+}
+
+.rf-favoris .RapidFilterMySelectOptionsUL > li {
+    /* Box-model */
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+
+    /* Typographie */
+    font-size: 13px;
+
+    /* Visuel */
+    border-radius: 3px;
+
+    /* Divers */
+    cursor: pointer;
+}
+
+.rf-favoris .RapidFilterMySelectOptionsUL > li:hover {
+    background: rgba(31, 68, 146, 0.08);
+    color: var(--rf-primary);
+}
+
+/* ==========================================================================
+   6. PASTILLE DE COMPTAGE
+   ========================================================================== */
+
+/**
+ * Indique le NOMBRE de valeurs sélectionnées dans le filtre. Alimentée par
+ * EGOAL_FiltreRapideSelectize ; pointer-events: none pour que le clic atteigne
+ * le champ situé dessous.
+ *
+ * Le repère vertical est le bas du conteneur et non son haut : l'étiquette
+ * ayant une hauteur propre, un positionnement depuis le haut ferait flotter la
+ * pastille au-dessus du champ.
+ */
+.rf-selectize__count {
+    /* Positionnement */
+    position: absolute;
+    bottom: calc(var(--rf-height) - 10px);
+    right: -6px;
+    z-index: 10;
+    /* Box-model */
+    display: none;
+    box-sizing: border-box;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    /* Typographie */
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 20px;
+    text-align: center;
+    white-space: nowrap;
+    /* Visuel */
+    background: var(--rf-accent);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    /* Divers */
+    pointer-events: none;
+}
+
+.rf-selectize.has-count .rf-selectize__count {
+    display: block;
+}
+
+/* ==========================================================================
+   7. LISTE DÉROULANTE - JAMAIS PLUS LARGE QUE LE CHAMP
+   ========================================================================== */
+
+/**
+ * Cas où la liste reste dans le flux du filtre (dropdownParent non appliqué).
+ */
+.rf-selectize .selectize-dropdown {
+    /* Box-model */
+    box-sizing: border-box;
+    min-width: 0 !important;
+    max-width: 100%;
+    overflow: hidden;
+
+    /* Typographie */
+    font-size: 13px;
+
+    /* Visuel */
+    border: 1px solid var(--rf-primary);
+    border-top: none;
+    border-radius: 0 0 var(--rf-radius) var(--rf-radius);
+    box-shadow: 0 6px 16px rgba(31, 68, 146, 0.15);
+}
+
+.rf-selectize .selectize-dropdown-content {
+    /* Box-model */
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    max-height: 300px;
+    overflow-x: auto;
+}
+
+.rf-selectize .selectize-dropdown .option {
+    /* Box-model */
+    display: flex;
+    gap: 4px;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    padding: 6px 10px;
+
+    /* Typographie */
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
+.rf-selectize .selectize-dropdown .active {
+    background: rgba(31, 68, 146, 0.08);
+    color: var(--rf-primary);
+}
+
+.rf-selectize .selectize-dropdown .highlight {
+    background: rgba(0, 98, 199, 0.18);
+    border-radius: 2px;
+}
+
+.rf-selectize .selectize-dropdown .no-results,
+.rf-selectize .selectize-dropdown .optgroup-header {
+    /* Box-model */
+    padding: 8px 10px;
+
+    /* Typographie */
+    font-size: 13px;
+    font-style: italic;
+
+    /* Visuel */
+    color: #777;
+}
+
+/* --------------------------------------------------------------------------
+   7.1 Lignes à cocher
+   -------------------------------------------------------------------------- */
+
+/**
+ * Chaque ligne porte une case à cocher à gauche. hideSelected étant désactivé
+ * côté JS, les valeurs retenues restent affichées dans la liste : la sélection
+ * se lit verticalement, et un clic sur une ligne cochée la retire.
+ */
+.selectize-dropdown-content .rf-option {
+    /* Box-model */
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+}
+
+.rf-option__check {
+    /* Positionnement */
+    position: relative;
+
+    /* Box-model */
+    display: inline-block !important;
+    box-sizing: border-box !important;
+    flex: 0 0 16px;
+    width: 16px !important;
+    height: 16px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+
+    /* Visuel */
+    background: #fff;
+    border: 2px solid #8a97ab;
+    border-radius: 3px;
+
+    /* Divers */
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+/* Coche dessinée en CSS : aucune dépendance à une police d'icônes */
+.rf-option__check::after {
+    /* Positionnement */
+    position: absolute;
+    top: 1px;
+    left: 4px;
+
+    /* Box-model */
+    content: '';
+    width: 4px;
+    height: 8px;
+
+    /* Visuel */
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    opacity: 0;
+    transform: rotate(45deg);
+}
+
+.selectize-dropdown .rf-option.is-checked .rf-option__check {
+    background: var(--rf-primary);
+    border-color: var(--rf-primary);
+}
+
+.selectize-dropdown .rf-option.is-checked .rf-option__check::after {
+    opacity: 1;
+}
+
+.selectize-dropdown .rf-option.is-checked .rf-option__label {
+    font-weight: 600;
+}
+
+.selectize-dropdown .rf-option:hover .rf-option__check {
+    border-color: var(--rf-primary);
+}
+
+.rf-option__label {
+    /* Box-model */
+    flex: 0 1 auto;
+    min-width: 0;
+
+    /* Typographie */
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
+/**
+ * Pastille de code dans la LISTE : police à chasse fixe, les codes s'y lisent en
+ * colonne et l'alignement des caractères aide à les comparer.
+ */
+.rf-option__badge {
+    /* Box-model */
+    flex: 0 0 auto;
+    padding: 1px 5px;
+
+    /* Typographie */
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.5;
+
+    /* Visuel */
+    background: rgba(31, 68, 146, 0.08);
+    color: var(--rf-primary);
+    border-radius: 3px;
+}
+
+/**
+ * Même élément une fois la valeur retenue dans le CHAMP : aucun traitement
+ * particulier. Les filtres à badge (Pilote) rendaient un texte à chasse fixe sur
+ * fond translucide, là où les filtres sans badge (Programme, Avancement)
+ * affichaient un simple .item. La pastille reprend donc ici la typographie et le
+ * fond de .item, pour que les trois filtres se lisent de la même façon.
+ */
+.rf-selectize .selectize-input > .item .rf-item__badge {
+    /* Box-model */
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 0;
+    
+    /* Typographie */
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    
+    /* Visuel */
+    background: none;
+    color: inherit;
+    border-radius: 0;
+}
+
+/* --------------------------------------------------------------------------
+   7.2 Pied de liste
+   -------------------------------------------------------------------------- */
+
+/**
+ * Invite à saisir lorsque le plafond de sécurité serveur a été atteint. Placé
+ * hors de .selectize-dropdown-content pour survivre aux rafraîchissements
+ * d'options et rester collé en bas de la liste.
+ */
+.rf-selectize__hint {
+    /* Box-model */
+    display: none;
+    box-sizing: border-box;
+    width: 100%;
+    padding: 6px 10px;
+
+    /* Typographie */
+    font-size: 12px;
+    font-style: italic;
+    line-height: 1.3;
+    text-align: center;
+
+    /* Visuel */
+    background: #f5f7fa;
+    color: var(--rf-ink-soft);
+    border-top: 1px solid var(--rf-border-soft);
+}
+
+/* --------------------------------------------------------------------------
+   7.3 Liste déportée dans <body> (dropdownParent: 'body')
+   -------------------------------------------------------------------------- */
+
+/**
+ * copyClassesToDropdown reporte .rf-selectize__select sur le dropdown : c'est
+ * le seul point d'accroche disponible une fois la liste sortie du conteneur.
+ *
+ * Largeur : Selectize pose une largeur inline égale à celle du contrôle, mais
+ * la liste vit dans <body>, hors de .selectize-control. Or la règle
+ * `.selectize-control * { box-sizing: border-box }` de la bibliothèque ne
+ * s'applique qu'aux descendants du contrôle : la liste retombe donc en
+ * content-box, la bordure s'ajoute à la largeur, et surtout rien n'empêche une
+ * option longue de repousser le bloc. D'où le triplet imposé ici - box-sizing,
+ * min-width neutralisé, overflow masqué - complété par un verrou posé en
+ * JavaScript à l'ouverture, qui seul connaît la largeur réelle du champ à cet
+ * instant.
+ *
+ * La lecture des libellés entiers se fait par défilement horizontal du contenu,
+ * jamais par élargissement de la liste.
+ *
+ * Bordure : 1 px comme le champ, sans bord supérieur, de sorte que champ et
+ * liste ne forment qu'un seul bloc.
+ */
+.selectize-dropdown.rf-selectize__select {
+    /* Box-model */
+    box-sizing: border-box !important;
+    min-width: 0 !important;
+    max-width: 100vw;
+    overflow: hidden !important;
+
+    /* Typographie */
+    font-size: 13px;
+
+    /* Visuel */
+    background: #fff;
+    border: 1px solid var(--rf-primary);
+    border-top: none;
+    border-radius: 0 0 var(--rf-radius) var(--rf-radius);
+    box-shadow: 0 6px 16px rgba(31, 68, 146, 0.15);
+}
+
+/**
+ * Défilement horizontal : les libellés longs restent lisibles en entier, sans
+ * que la liste déborde de la largeur du champ. width et max-width sont imposés
+ * pour que le conteneur de défilement ne puisse jamais adopter la largeur de
+ * son contenu.
+ */
+.selectize-dropdown.rf-selectize__select .selectize-dropdown-content {
+    /* Box-model */
+    box-sizing: border-box !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 300px;
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+
+    /* Divers */
+    scrollbar-width: thin;
+}
+
+.selectize-dropdown.rf-selectize__select .selectize-dropdown-content::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+.selectize-dropdown.rf-selectize__select .selectize-dropdown-content::-webkit-scrollbar-thumb {
+    background: rgba(31, 68, 146, 0.3);
+    border-radius: 3px;
+}
+
+/* Les lignes s'étendent au contenu, jamais en deçà de la largeur du champ */
+.selectize-dropdown.rf-selectize__select .rf-option {
+    width: max-content;
+    min-width: 100%;
+}
+
+/* L'ellipse doit disparaître, sinon le défilement n'a rien à révéler */
+.selectize-dropdown.rf-selectize__select .rf-option__label {
+    flex: 1;
+    text-overflow: clip;
+    overflow: visible;
+}
+
+/* ==========================================================================
+   8. BOUTON D'APPLICATION
+   ========================================================================== */
+
+/**
+ * Hauteur imposée en border-box : la classe .btn du design system ajoute son
+ * propre padding vertical et une bordure, qui s'ajoutaient à la hauteur déclarée
+ * et rendaient le bouton deux pixels plus haut que les champs voisins.
+ */
+.rf-selectize__apply {
+    /* Box-model */
+    box-sizing: border-box !important;
+    flex: 0 0 auto;
+    height: var(--rf-height) !important;
+    min-height: var(--rf-height) !important;
+    max-height: var(--rf-height) !important;
+    padding: 0 16px !important;
+    margin: 0 !important;
+    vertical-align: top;
+
+    /* Typographie */
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+
+    /* Visuel */
+    background: var(--rf-primary);
+    color: #fff;
+    border: 1px solid var(--rf-primary);
+    border-radius: var(--rf-radius);
+
+    /* Divers */
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.rf-selectize__apply:hover,
+.rf-selectize__apply:focus {
+    background: var(--rf-primary-hover);
+    border-color: var(--rf-primary-hover);
+    color: #fff;
+}
+
+/* État "modifié mais non appliqué" */
+.rf-selectize__apply.is-dirty {
+    background: var(--rf-accent);
+    border-color: var(--rf-accent);
+    box-shadow: 0 0 0 3px rgba(0, 98, 199, 0.2);
+}
+
+.rf-selectize__apply:focus-visible {
+    outline: 2px solid var(--rf-accent);
+    outline-offset: 2px;
+}
+
+/* ==========================================================================
+   9. VUES PRÉFILTRÉES - TITRE ET SOUS-TITRE
+   ========================================================================== */
+
+/**
+ * Certaines vues affichent un bandeau de contexte au-dessus de la barre de
+ * filtres : mois d'engagement et message associé (plan d'engagement, M+,
+ * programme), semaine affichée (OVA), intitulé de la vue (demandes,
+ * contribution, approbation). Ces blocs étaient collés à la barre, faute de
+ * marge propre - le libellé du premier filtre venait toucher le sous-titre.
+ *
+ * Les quatre conteneurs sont traités ensemble : ils occupent la même position
+ * dans la page et doivent produire la même respiration, quelle que soit la vue.
+ */
+#titreMessageMoisEngAAfficher,
+#containerSemaineAfficher,
+#NomEcheancierDemandes,
+#NomEcheancierContribuApprob {
+    /* Box-model */
+    padding: 4px 0 12px;
+    margin: 0 0 4px;
+}
+
+/**
+ * Titre et sous-titre. Les tailles ne sont pas imposées : elles sont posées en
+ * ligne par le script qui alimente ces blocs. Seuls l'interlignage et la
+ * couleur du sous-titre sont harmonisés avec le reste de la barre.
+ */
+#titreAAfficherText {
+    /* Typographie */
+    line-height: 1.25;
+}
+
+#messageAAfficherText {
+    /* Typographie */
+    font-size: 14px;
+    line-height: 1.35;
+    
+    /* Visuel */
+    color: var(--rf-ink-soft);
+}
+
+/* ==========================================================================
+   10. RESPONSIVE - DEUX FILTRES PAR LIGNE
+   ========================================================================== */
+
+@media (max-width: 1280px) {
+    .rf-toolbar__filters {
+        flex-wrap: wrap;
+        flex: 1 1 100%;
+    }
+
+    /* Deux par ligne : la moitié de la largeur, moins la moitié du gap */
+    .rf-selectize,
+    .rf-favoris {
+        flex: 0 0 calc(50% - (var(--rf-gap) / 2));
+        width: calc(50% - (var(--rf-gap) / 2));
+    }
+
+    /* Le bouton Appliquer prend une ligne pour lui */
+    .rf-selectize__apply {
+        flex: 1 1 100%;
+    }
+
+    .rf-toolbar__actions {
+        margin-left: 0;
+    }
+}
+
+/* ==========================================================================
+   11. RESPONSIVE - FILTRES ET BASCULES EMPILÉS
+   ========================================================================== */
+
+@media (max-width: 700px) {
+    .rf-selectize,
+    .rf-favoris {
+        flex: 0 0 100%;
+        width: 100%;
+    }
+
+    /* Les bascules suivent les filtres et s'empilent à leur tour */
+    .rf-toolbar__toggles {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+        height: auto;
+        padding-left: 0;
+        border-left: none;
+    }
+
+    /* Les actions restent groupées sur une même ligne */
+    .rf-toolbar__actions {
+        flex: 1 1 100%;
+        justify-content: flex-start;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .rf-selectize .selectize-input,
+    .rf-favoris #GOALStyleName,
+    .rf-selectize__apply,
+    .rf-option__check {
+        transition: none;
+    }
+}
