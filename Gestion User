@@ -1,3 +1,1533 @@
+Un comparateur unique (`Intl.Collator('fr', { sensitivity: 'accent' })`) est désormais partagé — équivalent côté client du `Collator SECONDARY` utilisé en Groovy pour les programmes.
+
+**Six points de tri :**
+
+| Où | Avant |
+|---|---|
+| Référentiel UO (selectize) | `localeCompare` sans locale — dépendait du navigateur |
+| UO affectées d'un utilisateur | ordre de stockage |
+| Liste déroulante du profil par défaut | ordre de déclaration |
+| Cases à cocher de profil | ordre hiérarchique |
+| UO à l'enregistrement | ordre de saisie |
+| Programmes à l'enregistrement | ordre d'affichage |
+
+Les deux derniers ne sont pas cosmétiques : sans eux, un simple réordonnancement des UO produit une chaîne différente en base et apparaît comme une modification dans l'historique du document.
+
+**Un point que je veux signaler.** L'ordre des cases à cocher de profil n'était pas arbitraire : il allait du moins au plus privilégié. L'ordre alphabétique donne maintenant :
+
+> Admin · Admin Fonctionnel · Admin RSAP · Metier · Pilotage · Programme
+
+Les trois profils d'administration se retrouvent en tête de liste. C'est peut-être ce que vous vouliez, mais si la hiérarchie vous semblait plus lisible pour cette liste précise, je peux la restaurer tout en gardant le tri alphabétique sur la liste déroulante — qui est le vrai endroit où l'on cherche une valeur. Un mot suffit.
+
+Reste ouverte la question de la fois précédente : dois-je intégrer le tri des programmes, des UO et des profils au commit et au commentaire de user story, puis pousser l'ensemble sur Notion ?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// GOAL PDE - Gestion des utilisateurs (USER_GOAL.Macro.UGOAL_FicheSpecifique)
+//
+// MODES DE DROITS (deduits du parametre ?profil= de l'URL)
+//   - MODE_LECTURE  (0) : l'utilisateur consulte sa propre fiche, tout est verrouille
+//   - MODE_ADMIN    (1) : l'administrateur edite tous les champs de n'importe quel compte
+//   - MODE_AUTO_PRG (2) : le profil Programme edite SON perimetre programme uniquement
+//
+// MODES DE FICHE (etat du panneau de droite)
+//   - FICHE_EDITION  : chargement et mise a jour d'un compte existant
+//   - FICHE_CREATION : saisie d'un nouveau compte
+//   Le meme formulaire sert aux deux usages : plus de modal ni d'identifiants
+//   dupliques en *NewUser. Seuls changent le controle de saisie du login, le
+//   libelle du bouton et l'endpoint appele a l'enregistrement.
+//
+// AVERTISSEMENT SECURITE :
+//   Le verrouillage realise ici est purement ergonomique. Les controles reels
+//   sont implementes dans USER_GOAL.Macro.UGOAL_GestUserGroovy.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////// Section : Parametres d'URL
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * @description Extrait les parametres de la query string courante.
+ * @returns {Object} Dictionnaire cle -> [valeur] (valeur encapsulee dans un tableau)
+ */
+function GOALGetQueryParams() {
+	var params = {};
+	var queryString = window.location.search.substring(1);
+	var regex = /([^&=]+)=([^&]*)/g;
+	var match;
+	while (match = regex.exec(queryString)) {
+		params[decodeURIComponent(match[1])] = [decodeURIComponent(match[2])];
+	}
+	return params;
+}
+
+let vQueryParams = GOALGetQueryParams();
+let nomProfil = "";
+let complementURL = "";
+for (var key in vQueryParams) {
+	if (key == 'profil') {
+		nomProfil = vQueryParams['profil'];
+		complementURL = "?profil=" + vQueryParams['profil'];
+	}
+}
+
+// Warning : GOALGetQueryParams stocke les valeurs dans un tableau a un element.
+// La coercition fonctionne avec ==, mais pas avec Array.includes() : d'ou le String().
+const profilCourant = String(nomProfil);
+
+let debugMode = 0;
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////// Section : Constantes et etat de la page
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/** Consultation seule de sa propre fiche */
+const MODE_LECTURE = 0;
+/** Edition complete de n'importe quel utilisateur */
+const MODE_ADMIN = 1;
+/** Auto-service : edition de son propre perimetre programme uniquement */
+const MODE_AUTO_PRG = 2;
+
+/** Etats du panneau de droite */
+const FICHE_EDITION = 'edition';
+const FICHE_CREATION = 'creation';
+
+/** Profils disposant des droits d'administration de la fiche utilisateur */
+const PROFILS_ADMIN = ['DroitsProfilsADMINI', 'DroitsProfilsADGICA'];
+
+/** Profils autorises a modifier eux-memes leur liste de programmes */
+const PROFILS_AUTO_PRG = ['DroitsProfilsPROGME'];
+
+/** Classe utilitaire d'affichage definie dans le SSX */
+const CSS_HIDDEN = 'ug-is-hidden';
+
+/**
+ * Table de reference des six profils PDE.
+ * Source unique de verite cote client : alimentation des cases a cocher,
+ * reconstruction de la liste des profils par defaut et construction du payload
+ * s'appuient toutes sur cette table.
+ * Warning : les identifiants et les valeurs doivent correspondre au velocity
+ * et aux cles JSON renvoyees par UGOAL_GestUserGroovy.
+ */
+const PROFILS_GOAL = [
+	{ cle: 'estProfilProgramme', id: 'profilProgrammeID',  valeur: 'DroitsProfilsPROGME', libelle: 'Programme' },
+	{ cle: 'estProfilMetier',    id: 'profilMetierID',     valeur: 'DroitsProfilsMetier', libelle: 'Metier' },
+	{ cle: 'estProfilPilotage',  id: 'profilPilotageID',   valeur: 'DroitsProfilsCELPIL', libelle: 'Pilotage' },
+	{ cle: 'estProfilAdmin',     id: 'profilAdminID',      valeur: 'DroitsProfilsADMINI', libelle: 'Admin' },
+	{ cle: 'estProfilAdmGica',   id: 'profilAdminGicaID',  valeur: 'DroitsProfilsADGICA', libelle: 'Admin RSAP' },
+	{ cle: 'estProfilAdmFonct',  id: 'profilAdminFonctID', valeur: 'DroitsProfilsADFONC', libelle: 'Admin Fonctionnel' }
+];
+
+/** Mode de droits courant */
+let mode = MODE_LECTURE;
+
+if (PROFILS_ADMIN.includes(profilCourant)) {
+	mode = MODE_ADMIN;
+} else if (PROFILS_AUTO_PRG.includes(profilCourant)) {
+	mode = MODE_AUTO_PRG;
+}
+
+/** Etat courant du panneau de droite */
+let vModeFiche = FICHE_EDITION;
+
+/** Indique si la fiche comporte des modifications non enregistrees */
+let vEstModifie = false;
+
+/**
+ * Indique qu'un chargement ou une reinitialisation de fiche est en cours.
+ * Warning : selectize declenche son callback onChange lors des appels
+ * programmatiques a setValue() et clear(). Sans ce drapeau, l'alimentation
+ * du formulaire marquerait immediatement la fiche comme modifiee.
+ */
+let vChargementEnCours = false;
+
+/** Login actuellement selectionne dans la liste */
+let vOldUser = "";
+
+/** Vrai si le login choisi en creation correspond a un compte deja existant */
+let vLoginDejaExistant = false;
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////// Section : Identifiants des elements du DOM
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Warning : Attention aux ids cf dans le velocity
+const elt_Select_ProfilParDefautUpdate = "Select_ProfilParDefautUpdate";
+const elt_Select_PdnParDefautUpdate = "Select_Select_PdnParDefautUpdate";
+const elt_Input_Login_Update_User = "Input_Login_Update_User";
+const elt_Input_Liste_UO_Update_User = "Input_Liste_UO_Update_User";
+const elt_DetailUserContainer = "DetailUserContainer";
+const elt_span_closeEditUserGOAL = "span_closeEditUserGOAL";
+const elt_span_saveUserGOAL = "span_saveUserGOAL";
+const elt_ErrorDetailUserContainer = "ErrorDetailUserContainer";
+
+/** Selecteur de login utilise en creation (widget selectize) */
+const elt_Select_Login_NewUser = "selectize-login-nomeris";
+const elt_HelpBlock = "help-block";
+const elt_LoginLoading = "selectize-loading";
+
+/** Champ login en consultation / modification */
+const elt_ZoneLoginLecture = "ug-login-lecture";
+const elt_ZoneLoginCreation = "ug-login-creation";
+
+/** Tableau des programmes de la fiche */
+const elt_TableProgramme = "TableProgramme";
+
+/** Carte affichee tant qu'aucun compte n'est ouvert (administrateur) */
+const elt_EmptyState = "ug-empty-state";
+
+/** Mise a jour du modele d'import */
+const elt_btnMajModeleImport = "GOAL_MajModeleImportGOAL";
+const elt_MajModeleImportLabel = "ug-majmodele-label";
+
+/** Page Groovy realisant la regeneration du modele d'import */
+const DOC_MAJ_MODELE_IMPORT = { page: 'EGOAL_AdminLDPWPGroovy', space: 'EcheancierGOAL.Macro' };
+
+/** Suppression de compte */
+const elt_btnSupprimerUser = "GOAL_btn_SupprimerUser";
+const elt_ConfirmSuppression = "ug-confirm-suppression";
+const elt_ConfirmLogin = "ug-confirm-login";
+const elt_ConfirmDetail = "ug-confirm-detail";
+const elt_ConfirmValider = "ug-confirm-valider";
+const elt_DeleteLabel = "ug-delete-label";
+const elt_ConfirmValiderLabel = "ug-confirm-valider-label";
+
+/** Libelles pilotes dynamiquement */
+const elt_DetailTitle = "ug-detail-title";
+const elt_DetailLogin = "ug-detail-login";
+const elt_DetailEyebrow = "ug-detail-eyebrow";
+const elt_SaveLabel = "ug-save-label";
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////// Section : Utilitaires DOM
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Collateur unique pour tous les tris de libelles de l'ecran.
+ * 'accent' -> insensible a la casse, mais sensible aux accents pour le
+ * departage. Equivalent du Collator SECONDARY utilise cote Groovy.
+ * Warning : Intl.Collator est couteux a instancier, on le cree une seule fois.
+ */
+const GOAL_CollateurLibelles = new Intl.Collator('fr', { sensitivity: 'accent' });
+
+/**
+ * @description Compare deux libelles selon les regles alphabetiques francaises.
+ *              Un tri brut rejetterait les libelles accentues apres le Z, les
+ *              caracteres accentues ayant un code superieur aux autres.
+ * @param {string} a - Premier libelle
+ * @param {string} b - Second libelle
+ * @returns {number} Negatif, zero ou positif
+ */
+function GOAL_ComparerLibelles(a, b) {
+	return GOAL_CollateurLibelles.compare((a || '').toString(), (b || '').toString());
+}
+
+/**
+ * @description Trie une liste de libelles par ordre alphabetique, en ecartant
+ *              les valeurs vides.
+ * @param {Array<string>} liste - Libelles a trier
+ * @returns {Array<string>} Nouvelle liste triee
+ */
+function GOAL_TrierLibelles(liste) {
+	return (liste || [])
+		.map(v => (v || '').toString().trim())
+		.filter(v => v !== '')
+		.sort(GOAL_ComparerLibelles);
+}
+
+/**
+ * @description Affiche ou masque un element via la classe utilitaire .ug-is-hidden.
+ * @param {string} id - Identifiant de l'element
+ * @param {boolean} visible - true pour afficher, false pour masquer
+ */
+function GOAL_Afficher(id, visible) {
+	const vElt = document.getElementById(id);
+	if (!vElt) return;
+	vElt.classList.toggle(CSS_HIDDEN, !visible);
+}
+
+/**
+ * @description Renseigne le contenu textuel d'un element s'il existe.
+ * @param {string} id - Identifiant de l'element
+ * @param {string} texte - Texte a afficher
+ */
+function GOAL_SetTexte(id, texte) {
+	const vElt = document.getElementById(id);
+	if (vElt) vElt.textContent = texte;
+}
+
+/**
+ * @description Retourne les checkbox programme de la fiche.
+ * @returns {Array<HTMLInputElement>} Liste des checkbox programme
+ */
+function GOAL_GetCheckboxesProgramme() {
+	const vTable = document.getElementById(elt_TableProgramme);
+	return vTable ? Array.from(vTable.querySelectorAll('input[type="checkbox"]')) : [];
+}
+
+/**
+ * @description Retourne le login courant de la fiche, quel que soit le controle
+ *              de saisie actif : champ texte en modification, selectize en creation.
+ * @returns {string} Login, chaine vide si absent
+ */
+function GOAL_GetLoginFiche() {
+
+	if (vModeFiche === FICHE_CREATION) {
+		const vSelectLogin = document.getElementById(elt_Select_Login_NewUser);
+		if (!vSelectLogin) return "";
+		const vValeur = (vSelectLogin.selectize)
+			? (vSelectLogin.selectize.getValue() || "")
+			: (vSelectLogin.value || "");
+		return String(vValeur).trim();
+	}
+
+	const vInputLogin = document.getElementById(elt_Input_Login_Update_User);
+	return vInputLogin ? vInputLogin.value.trim() : "";
+}
+
+/**
+ * @description Affiche l'identite de la personne en tete de fiche.
+ *              Le titre porte "Prenom Nom" et le login est rappele en dessous.
+ *              Si aucune identite n'est renseignee dans le compte XWiki, le
+ *              titre reprend le login et la ligne du dessous reste vide : elle
+ *              disparait alors d'elle-meme (regle :empty du SSX).
+ * @param {string} login - Login XWiki
+ * @param {string} nomComplet - Identite "Prenom Nom", eventuellement vide
+ */
+function GOAL_AfficherIdentite(login, nomComplet) {
+
+	const vNom = (nomComplet || '').trim();
+
+	GOAL_SetTexte(elt_DetailTitle, vNom !== "" ? vNom : login);
+	GOAL_SetTexte(elt_DetailLogin, vNom !== "" ? login : "");
+}
+
+/**
+ * @description Bascule un bouton en etat de chargement : anneau tournant,
+ *              bouton desactive et libelle remplace le temps de l'appel serveur.
+ * @param {string} idBouton - Identifiant du bouton
+ * @param {string} idLibelle - Identifiant du span portant le libelle
+ * @param {boolean} enCours - true pour activer l'etat de chargement
+ * @param {string} [texteChargement] - Libelle affiche pendant l'attente
+ */
+function GOAL_SetChargementBouton(idBouton, idLibelle, enCours, texteChargement) {
+
+	const vBouton = document.getElementById(idBouton);
+	if (!vBouton) return;
+
+	const vLibelle = document.getElementById(idLibelle);
+
+	if (enCours) {
+		if (vLibelle && !vLibelle.dataset.libelleInitial) {
+			vLibelle.dataset.libelleInitial = vLibelle.textContent;
+		}
+		if (vLibelle && texteChargement) {
+			vLibelle.textContent = texteChargement;
+		}
+		vBouton.classList.add('is-loading');
+		vBouton.disabled = true;
+		vBouton.setAttribute('aria-busy', 'true');
+
+	} else {
+		if (vLibelle && vLibelle.dataset.libelleInitial) {
+			vLibelle.textContent = vLibelle.dataset.libelleInitial;
+		}
+		vBouton.classList.remove('is-loading');
+		vBouton.disabled = false;
+		vBouton.removeAttribute('aria-busy');
+	}
+}
+
+/**
+ * @description Marque la fiche comme modifiee ou propre.
+ *              Le bouton d'enregistrement est neutre et desactive quand la fiche
+ *              est propre, rouge et pulsant des la premiere modification.
+ * @param {boolean} estModifie - Etat de modification
+ */
+function GOAL_SetModifie(estModifie) {
+
+	vEstModifie = estModifie;
+
+	const vBtnSave = document.getElementById(elt_span_saveUserGOAL);
+	if (!vBtnSave) return;
+
+	// En lecture seule, ou si le login choisi existe deja, le bouton reste inerte
+	if (mode === MODE_LECTURE || vLoginDejaExistant) {
+		vBtnSave.disabled = true;
+		return;
+	}
+
+	vBtnSave.disabled = !estModifie;
+}
+
+/**
+ * @description Point d'entree unique des modifications utilisateur.
+ *              Ignore les changements declenches par le chargement de la fiche.
+ *              Appelee par les ecouteurs de cette page ET par le callback
+ *              onChange de UGOAL_SelectizeUO.js (widget des UO pilote).
+ */
+function GOAL_NotifierModification() {
+	if (vChargementEnCours) return;
+
+	// Une modification en cours rend la demande de suppression caduque
+	GOAL_Afficher(elt_ConfirmSuppression, false);
+
+	GOAL_SetModifie(true);
+}
+
+/**
+ * @description Selectionne automatiquement le profil par defaut lorsqu'un seul
+ *              profil est attribue a l'utilisateur.
+ *
+ *              Le profil par defaut est une saisie obligatoire regulierement
+ *              oubliee alors qu'il n'existe qu'une seule valeur possible dans
+ *              la grande majorite des cas. La selection reste modifiable des
+ *              qu'un second profil est coche.
+ * @returns {boolean} true si une valeur a ete appliquee
+ */
+function GOAL_AppliquerProfilParDefautUnique() {
+
+	const vSelect = document.getElementById(elt_Select_ProfilParDefautUpdate);
+	if (!vSelect) return false;
+
+	// L'option vide de tete n'est pas un profil selectionnable
+	const vOptions = Array.from(vSelect.options).filter(o => o.value !== "");
+
+	if (vOptions.length !== 1) return false;
+	if (vSelect.value === vOptions[0].value) return false;
+
+	vSelect.value = vOptions[0].value;
+	if (debugMode) console.log("GOAL - Profil par defaut applique automatiquement : ", vSelect.value);
+	return true;
+}
+
+/**
+ * @description Applique le verrouillage des controles selon le mode de droits
+ *              et l'etat de la fiche.
+ *              - Login       : selectize de creation ou champ texte verrouille
+ *              - Programmes  : editables en ADMIN et en AUTO_PRG
+ *              - UO, profils, type de PDn : editables en ADMIN uniquement
+ */
+function GOAL_AppliquerVerrouillage() {
+
+	const vLockProfils = (mode !== MODE_ADMIN);
+	const vEstCreation = (vModeFiche === FICHE_CREATION);
+	const vinputListeUO = document.getElementById(elt_Input_Liste_UO_Update_User);
+
+	// --- Zone login : un seul des deux controles est visible a la fois
+	GOAL_Afficher(elt_ZoneLoginLecture, !vEstCreation);
+	GOAL_Afficher(elt_ZoneLoginCreation, vEstCreation);
+
+	const vInputLogin = document.getElementById(elt_Input_Login_Update_User);
+	if (vInputLogin) vInputLogin.disabled = true; // jamais saisissable en modification
+
+	// --- Programmes
+	GOAL_GetCheckboxesProgramme().forEach(cb => {
+		cb.disabled = (mode === MODE_LECTURE);
+	});
+
+	// --- UO : le disabled seul ne verrouille pas le widget Selectize, il faut lock()/unlock()
+	if (vinputListeUO) {
+		if (vinputListeUO.selectize) {
+			if (mode === MODE_ADMIN) {
+				vinputListeUO.selectize.unlock();
+			} else {
+				vinputListeUO.selectize.lock();
+			}
+		}
+		vinputListeUO.disabled = vLockProfils;
+	}
+
+	// --- Checkbox de profils
+	PROFILS_GOAL.forEach(p => {
+		const vElt = document.getElementById(p.id);
+		if (vElt) vElt.disabled = vLockProfils;
+	});
+
+	// --- Profil par defaut et type de PDn
+	[elt_Select_ProfilParDefautUpdate, elt_Select_PdnParDefautUpdate].forEach(id => {
+		const vElt = document.getElementById(id);
+		if (vElt) vElt.disabled = vLockProfils;
+	});
+}
+
+/**
+ * @description Vide integralement le formulaire de la fiche.
+ *              Le drapeau de chargement est leve pour ne pas declencher
+ *              le suivi des modifications via les callbacks selectize.
+ */
+function GOAL_ReinitialiserFiche() {
+
+	vChargementEnCours = true;
+
+	const vInputLogin = document.getElementById(elt_Input_Login_Update_User);
+	if (vInputLogin) vInputLogin.value = '';
+
+	const vSelectLogin = document.getElementById(elt_Select_Login_NewUser);
+	if (vSelectLogin && vSelectLogin.selectize) {
+		vSelectLogin.selectize.clear(true); // true = silencieux
+	}
+
+	GOAL_GetCheckboxesProgramme().forEach(cb => { cb.checked = false; });
+
+	PROFILS_GOAL.forEach(p => {
+		const vElt = document.getElementById(p.id);
+		if (vElt) vElt.checked = false;
+	});
+
+	const vinputListeUO = document.getElementById(elt_Input_Liste_UO_Update_User);
+	if (vinputListeUO) {
+		if (vinputListeUO.selectize) {
+			vinputListeUO.selectize.clear(true);
+		} else {
+			vinputListeUO.value = '';
+		}
+	}
+
+	const vSelectProfilDefaut = document.getElementById(elt_Select_ProfilParDefautUpdate);
+	if (vSelectProfilDefaut) {
+		vSelectProfilDefaut.innerHTML = '<option value="" selected> </option>';
+	}
+
+	const vSelectPdn = document.getElementById(elt_Select_PdnParDefautUpdate);
+	if (vSelectPdn && vSelectPdn.options.length > 0) {
+		vSelectPdn.selectedIndex = 0;
+	}
+
+	GOAL_Afficher(elt_ErrorDetailUserContainer, false);
+	GOAL_SetTexte(elt_DetailLogin, "");
+
+	const vHelp = document.getElementById(elt_HelpBlock);
+	if (vHelp) vHelp.classList.remove('is-visible');
+
+	vLoginDejaExistant = false;
+
+	setTimeout(() => { vChargementEnCours = false; }, 0);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////// Section : Ouverture de la fiche
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * @description Ouvre la fiche en MODIFICATION pour l'utilisateur selectionne.
+ * @param {string} loginUser - Login XWiki de l'utilisateur a editer
+ */
+function GOAL_GestUser_Edit(loginUser) {
+
+	if (debugMode) console.log("\n----- GOAL_GestUser_Edit -----");
+
+	vModeFiche = FICHE_EDITION;
+
+	GOAL_SetTexte(elt_DetailEyebrow, "Fiche utilisateur");
+	GOAL_SetTexte(elt_SaveLabel, "Enregistrer");
+
+	GOAL_Afficher(elt_DetailUserContainer, true);
+	GOAL_Afficher(elt_span_closeEditUserGOAL, true);
+	GOAL_Afficher(elt_span_saveUserGOAL, true);
+
+	// Suppression accessible uniquement sur un compte existant
+	GOAL_Afficher(elt_btnSupprimerUser, mode === MODE_ADMIN);
+	GOAL_Afficher(elt_ConfirmSuppression, false);
+
+	// La fiche remplace la carte d'invitation
+	GOAL_Afficher(elt_EmptyState, false);
+
+	// Mise en evidence de la ligne selectionnee
+	const voldTR = document.getElementById('TR_' + vOldUser);
+	if (voldTR) voldTR.classList.remove('is-selected');
+
+	const vnewTR = document.getElementById('TR_' + loginUser);
+	if (vnewTR) vnewTR.classList.add('is-selected');
+
+	vOldUser = loginUser;
+
+	GOAL_GestUser_EditRequest(loginUser);
+}
+
+/**
+ * @description Ouvre la fiche en CREATION d'un nouveau compte.
+ *              Remplace l'ancienne modal : meme formulaire, meme emplacement.
+ */
+function GOAL_GestUser_NouveauCompte() {
+
+	if (debugMode) console.log("\n----- GOAL_GestUser_NouveauCompte -----");
+
+	if (mode !== MODE_ADMIN) {
+		new XWiki.widgets.Notification('Droits administrateur requis.', 'error');
+		return;
+	}
+
+	vModeFiche = FICHE_CREATION;
+
+	const voldTR = document.getElementById('TR_' + vOldUser);
+	if (voldTR) voldTR.classList.remove('is-selected');
+	vOldUser = "";
+
+	GOAL_ReinitialiserFiche();
+
+	GOAL_SetTexte(elt_DetailEyebrow, "Nouveau compte");
+	GOAL_SetTexte(elt_DetailTitle, "Creation d'un utilisateur");
+	GOAL_SetTexte(elt_SaveLabel, "Creer le compte");
+
+	GOAL_Afficher(elt_DetailUserContainer, true);
+	GOAL_Afficher(elt_span_saveUserGOAL, true);
+	GOAL_Afficher(elt_span_closeEditUserGOAL, true);
+
+	// Rien a supprimer sur un compte qui n'existe pas encore
+	GOAL_Afficher(elt_btnSupprimerUser, false);
+	GOAL_Afficher(elt_ConfirmSuppression, false);
+	GOAL_Afficher(elt_EmptyState, false);
+
+	GOAL_AppliquerVerrouillage();
+	GOAL_SetModifie(false);
+
+	const vSelectLogin = document.getElementById(elt_Select_Login_NewUser);
+	if (vSelectLogin && vSelectLogin.selectize) vSelectLogin.selectize.focus();
+}
+
+/**
+ * @description Ferme la fiche et revient a l'etat initial.
+ */
+function GOAL_FermerFiche() {
+
+	GOAL_Afficher(elt_span_closeEditUserGOAL, false);
+	GOAL_Afficher(elt_span_saveUserGOAL, false);
+	GOAL_Afficher(elt_DetailUserContainer, false);
+	GOAL_Afficher(elt_ErrorDetailUserContainer, false);
+	GOAL_Afficher(elt_btnSupprimerUser, false);
+	GOAL_Afficher(elt_ConfirmSuppression, false);
+
+	// Retour a l'etat initial : la colonne de droite ne doit jamais rester vide
+	GOAL_Afficher(elt_EmptyState, true);
+
+	const voldTR = document.getElementById('TR_' + vOldUser);
+	if (voldTR) voldTR.classList.remove('is-selected');
+
+	vModeFiche = FICHE_EDITION;
+	vOldUser = "";
+	GOAL_ReinitialiserFiche();
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////// Section : Chargement d'un compte existant
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * @description Charge les informations d'un utilisateur et alimente le formulaire.
+ * @param {string} loginUser - Login XWiki de l'utilisateur a charger
+ * @returns {Promise<boolean|void>} false en cas d'erreur de requete
+ */
+async function GOAL_GestUser_EditRequest(loginUser) {
+
+	if (debugMode) console.log("\n----- GOAL_GestUser_EditRequest -----");
+
+	vChargementEnCours = true;
+	vLoginDejaExistant = false;
+
+	const urlGestUserGroovy = new XWiki.Document('UGOAL_GestUserGroovy', 'USER_GOAL.Macro').getURL('get');
+	const urlGestUserGroovyRequest = urlGestUserGroovy
+		+ "?outputSyntax=plain&type=RequestInfos&Login=" + encodeURIComponent(loginUser);
+
+	const vInputLogin = document.getElementById(elt_Input_Login_Update_User);
+	const vinputListeUO = document.getElementById(elt_Input_Liste_UO_Update_User);
+	const vSelectProfilDefaut = document.getElementById(elt_Select_ProfilParDefautUpdate);
+	const vSelectPdnDefaut = document.getElementById(elt_Select_PdnParDefautUpdate);
+
+	let vInfos = null;
+
+	// Reinitialisation des champs
+	vInputLogin.value = loginUser;
+	vSelectProfilDefaut.value = '';
+
+	GOAL_GetCheckboxesProgramme().forEach(cb => { cb.checked = false; });
+	PROFILS_GOAL.forEach(p => {
+		const vElt = document.getElementById(p.id);
+		if (vElt) vElt.checked = false;
+	});
+
+	try {
+		vInfos = await fetch(urlGestUserGroovyRequest).then(response => response.json());
+
+	} catch (e) {
+		console.error(e);
+		GOAL_Afficher(elt_DetailUserContainer, false);
+		GOAL_Afficher(elt_ErrorDetailUserContainer, true);
+		GOAL_Afficher(elt_span_saveUserGOAL, false);
+		GOAL_Afficher(elt_EmptyState, false);
+		vChargementEnCours = false;
+		return false;
+	}
+
+	if (debugMode) console.log("GOALUserInfoJson : ", vInfos);
+
+	const RefLogin = vInfos.S_LoginUser;
+
+	if (RefLogin != '') {
+
+		vInputLogin.value = RefLogin;
+		GOAL_AfficherIdentite(RefLogin, vInfos.S_NomComplet);
+
+		// --- Liste des UO
+		// Les valeurs sont stockees dans l'ordre de saisie : on les trie pour
+		// que l'affichage soit alphabetique quel que soit cet ordre.
+		const RefListeUOArray = GOAL_TrierLibelles((vInfos.S_ListeUO || '').split(','));
+
+		if (vinputListeUO.selectize) {
+			RefListeUOArray.forEach(element => {
+				vinputListeUO.selectize.addOption({ label: element, value: element });
+			});
+			vinputListeUO.selectize.setValue(RefListeUOArray);
+
+		} else {
+			console.error("Selectize instance not found for the element.");
+		}
+
+		// --- Type de PDn par defaut
+		if (vSelectPdnDefaut) vSelectPdnDefaut.value = vInfos.S_Type_PDN || 'PDE';
+
+		// --- Programmes affectes
+		(vInfos.S_ListeProgramme || '').split(',').map(e => e.trim()).forEach(prg => {
+			const vTDSelPRG = document.getElementById('Input_SEL_' + prg);
+			if (vTDSelPRG) vTDSelPRG.checked = true;
+		});
+
+		// --- Checkbox de profil
+		PROFILS_GOAL.forEach(p => {
+			const vElt = document.getElementById(p.id);
+			if (vElt) vElt.checked = !!vInfos[p.cle];
+		});
+
+		GOAL_Afficher(elt_ErrorDetailUserContainer, false);
+
+	} else {
+		GOAL_Afficher(elt_DetailUserContainer, false);
+		GOAL_Afficher(elt_span_saveUserGOAL, false);
+		GOAL_Afficher(elt_btnSupprimerUser, false);
+		GOAL_Afficher(elt_ErrorDetailUserContainer, true);
+		GOAL_Afficher(elt_EmptyState, false);
+	}
+
+	// --- Reconstruction de la liste des profils par defaut
+	// Tri alphabetique : PROFILS_GOAL est declaree dans l'ordre hierarchique
+	// des droits, qui n'est pas l'ordre attendu dans une liste deroulante.
+	let optionsProfil = "";
+	PROFILS_GOAL
+		.filter(p => vInfos[p.cle])
+		.sort((a, b) => GOAL_ComparerLibelles(a.libelle, b.libelle))
+		.forEach(p => {
+			optionsProfil += '<option value="' + p.valeur + '">' + p.libelle + '</option>';
+		});
+
+	vSelectProfilDefaut.innerHTML = optionsProfil;
+	vSelectProfilDefaut.value = vInfos.S_ProfilParDefaut || "";
+
+	// Comble un profil par defaut absent lorsqu'un seul profil est attribue.
+	// Le drapeau de chargement empeche de marquer la fiche comme modifiee :
+	// la valeur ne sera persistee qu'a l'enregistrement suivant.
+	if (!vInfos.S_ProfilParDefaut || vInfos.S_ProfilParDefaut === "") {
+		GOAL_AppliquerProfilParDefautUnique();
+	}
+
+	GOAL_AppliquerVerrouillage();
+
+	// Mode auto-service : GOAL_GestUser_Edit() n'est jamais appele,
+	// on revele donc ici la fiche et le bouton d'enregistrement.
+	if (mode === MODE_AUTO_PRG && RefLogin != '') {
+		GOAL_Afficher(elt_DetailUserContainer, true);
+		GOAL_Afficher(elt_span_saveUserGOAL, true);
+		GOAL_Afficher(elt_span_closeEditUserGOAL, false);
+	}
+
+	GOAL_SetModifie(false);
+
+	// Le formulaire est alimente : le suivi des modifications reprend.
+	// setTimeout(0) pour couvrir les callbacks selectize differes.
+	setTimeout(() => { vChargementEnCours = false; }, 0);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////// Section : Suppression d'un compte GOAL
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * @description Interroge le serveur sur la suppressibilite du compte charge,
+ *              puis affiche le bandeau de confirmation en place.
+ * @returns {Promise<void>}
+ */
+async function GOAL_GestUser_DemanderSuppression() {
+
+	if (debugMode) console.log("\n----- GOAL_GestUser_DemanderSuppression -----");
+
+	if (mode !== MODE_ADMIN || vModeFiche !== FICHE_EDITION) {
+		new XWiki.widgets.Notification('Action non disponible dans ce contexte.', 'error');
+		return;
+	}
+
+	const vLogin = GOAL_GetLoginFiche();
+	if (vLogin === "") {
+		new XWiki.widgets.Notification('Aucun utilisateur charge.', 'error');
+		return;
+	}
+
+	const urlGestUserGroovy = new XWiki.Document('UGOAL_GestUserGroovy', 'USER_GOAL.Macro').getURL('get');
+	const urlRequest = urlGestUserGroovy
+		+ "?outputSyntax=plain&type=CheckDeleteUser&Login=" + encodeURIComponent(vLogin);
+
+	let vReponse;
+
+	// L'appel de verification peut durer plusieurs secondes : sans retour
+	// visuel, le clic parait sans effet et l'utilisateur le repete.
+	GOAL_SetChargementBouton(elt_btnSupprimerUser, elt_DeleteLabel, true, "Verification...");
+
+	try {
+		vReponse = await fetch(urlRequest).then(r => r.json());
+
+	} catch (e) {
+		console.error(e);
+		new XWiki.widgets.Notification('Impossible de verifier ce compte.', 'error');
+		return;
+
+	} finally {
+		GOAL_SetChargementBouton(elt_btnSupprimerUser, elt_DeleteLabel, false);
+	}
+
+	if (debugMode) console.log("CheckDeleteUser : ", vReponse);
+
+	GOAL_SetTexte(elt_ConfirmLogin, vLogin);
+
+	const vBtnValider = document.getElementById(elt_ConfirmValider);
+
+	if (vReponse.estSupprimable === false) {
+		GOAL_SetTexte(elt_ConfirmDetail, vReponse.message || "Suppression impossible.");
+		if (vBtnValider) vBtnValider.disabled = true;
+
+	} else {
+		const vNb = vReponse.nbReferences || 0;
+		GOAL_SetTexte(
+			elt_ConfirmDetail,
+			vNb > 0
+				? "Attention : ce login est reference sur " + vNb + " echeance(s). Les donnees historiques seront conservees en l'etat."
+				: "Aucune echeance ne reference ce login."
+		);
+		if (vBtnValider) vBtnValider.disabled = false;
+	}
+
+	GOAL_Afficher(elt_ConfirmSuppression, true);
+}
+
+/**
+ * @description Ferme le bandeau de confirmation sans rien supprimer.
+ */
+function GOAL_GestUser_AnnulerSuppression() {
+	GOAL_Afficher(elt_ConfirmSuppression, false);
+	GOAL_SetTexte(elt_ConfirmDetail, "");
+}
+
+/**
+ * @description Supprime effectivement le compte GOAL apres confirmation,
+ *              puis recharge la page pour rafraichir la liste.
+ * @returns {Promise<void>}
+ */
+async function GOAL_GestUser_ConfirmerSuppression() {
+
+	if (debugMode) console.log("\n----- GOAL_GestUser_ConfirmerSuppression -----");
+
+	const vLogin = GOAL_GetLoginFiche();
+	if (vLogin === "") return;
+
+	// Etat de chargement : couvre aussi la protection contre le double clic
+	GOAL_SetChargementBouton(elt_ConfirmValider, elt_ConfirmValiderLabel, true, "Suppression...");
+
+	const urlGestUserGroovy = new XWiki.Document('UGOAL_GestUserGroovy', 'USER_GOAL.Macro').getURL('get');
+	const urlRequest = urlGestUserGroovy
+		+ "?outputSyntax=plain&type=DeleteUser&Login=" + encodeURIComponent(vLogin);
+
+	const vMSGnotification = new XWiki.widgets.Notification('Suppression en cours...', 'inprogress');
+
+	let vStatus;
+	let vMessage = "";
+
+	try {
+		await fetch(urlRequest, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ S_LoginUser: vLogin }) })
+			.then(r => r.json())
+			.then(r => { vStatus = r.status; vMessage = r.message || ""; });
+
+	} catch (e) {
+		console.error(e);
+		vMSGnotification.replace(new XWiki.widgets.Notification('Une erreur s\'est produite lors de la suppression', 'error'));
+		GOAL_SetChargementBouton(elt_ConfirmValider, elt_ConfirmValiderLabel, false);
+		return;
+	}
+
+	if (vStatus === "success") {
+		// L'etat de chargement est maintenu jusqu'a la redirection :
+		// la page va etre rechargee, rien ne doit redevenir cliquable.
+		vMSGnotification.replace(new XWiki.widgets.Notification("Compte supprime", "done"));
+		setTimeout(() => {
+			window.location.assign(
+				new XWiki.Document('UGOAL_FicheSpecifique', 'USER_GOAL.Macro').getURL('view') + complementURL
+			);
+		}, 700);
+
+	} else {
+		vMSGnotification.replace(new XWiki.widgets.Notification(vMessage || 'Suppression impossible', 'error'));
+		GOAL_SetChargementBouton(elt_ConfirmValider, elt_ConfirmValiderLabel, false);
+	}
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////// Section : Controle du login en creation
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * @description Verifie si la chaine contient le prefixe "xwiki:XWiki".
+ * @param {string} str - La chaine a verifier
+ * @returns {boolean} true si la chaine contient "xwiki:XWiki", sinon false
+ */
+function containsXWikiPrefix(str) {
+	const regex = /^xwiki:XWiki\./;
+	return regex.test(str);
+}
+
+/**
+ * @description Interroge le serveur pour savoir si le compte GOAL existe deja.
+ *              Bloque l'enregistrement le cas echeant.
+ * @param {string} loginUser - Login XWiki choisi
+ * @returns {Promise<void>}
+ */
+async function GOAL_checkNewUser(loginUser) {
+
+	if (debugMode) console.log("----- GOAL_checkNewUser -----");
+
+	const urlGestUserGroovy = new XWiki.Document('UGOAL_GestUserGroovy', 'USER_GOAL.Macro').getURL('get');
+	const urlGestUserGroovyRequest = urlGestUserGroovy
+		+ "?outputSyntax=plain&type=NUserRequestInfos&Login=" + encodeURIComponent(loginUser);
+
+	const vHelp = document.getElementById(elt_HelpBlock);
+	if (vHelp) vHelp.classList.remove('is-visible');
+
+	// Le bouton est bloque le temps de la verification : sur connexion lente,
+	// il resterait cliquable alors que l'existence du compte est inconnue.
+	vLoginDejaExistant = true;
+	GOAL_SetModifie(vEstModifie);
+	GOAL_Afficher(elt_LoginLoading, true);
+
+	let estDejaExistant;
+	let vNomComplet = "";
+	let enErreur = false;
+
+	await fetch(urlGestUserGroovyRequest)
+		.then(response => response.json())
+		.then(response => {
+			estDejaExistant = response.estDejaExistant;
+			vNomComplet = response.S_NomComplet || "";
+		})
+		.catch(e => { console.error(e); enErreur = true; });
+
+	GOAL_Afficher(elt_LoginLoading, false);
+
+	if (enErreur) {
+		new XWiki.widgets.Notification('Impossible de verifier ce login.', 'error');
+		return;
+	}
+
+	vLoginDejaExistant = !!estDejaExistant;
+	if (vHelp) vHelp.classList.toggle('is-visible', vLoginDejaExistant);
+
+	// L'identite du compte XWiki choisi s'affiche des la selection
+	GOAL_AfficherIdentite(loginUser, vNomComplet);
+
+	// Reevalue l'etat du bouton : bloque si le compte existe deja
+	GOAL_SetModifie(vEstModifie);
+}
+
+/**
+ * @description Pre-verification du login choisi. Appelee par le widget selectize
+ *              du login (onChange) et par les ecouteurs de cette page.
+ *              Sans effet hors du mode creation.
+ */
+function GOAL_NewUser_Login_Check() {
+
+	if (vModeFiche !== FICHE_CREATION) return;
+
+	let vLogin = GOAL_GetLoginFiche();
+	if (vLogin === "") return;
+
+	// Prefiltrage : retire le prefixage eventuel du suggesteur XWiki
+	if (containsXWikiPrefix(vLogin)) {
+		vLogin = vLogin.substring("xwiki:XWiki.".length);
+	}
+
+	// Le titre definitif est pose par GOAL_checkNewUser une fois l'identite
+	// connue : on n'affiche ici que le login, en attendant la reponse.
+	GOAL_AfficherIdentite(vLogin, "");
+	GOAL_NotifierModification();
+	GOAL_checkNewUser(vLogin);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////// Section : Enregistrement (creation et modification)
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * @description Controles de coherence puis appel de GOAL_Save.
+ *              Aiguille selon l'etat de la fiche et le mode de droits.
+ */
+async function GOAL_GestUser_EditSave() {
+
+	if (debugMode) console.log("\n----- GOAL_GestUser_EditSave -----");
+
+	const vinputListeUO = document.getElementById(elt_Input_Liste_UO_Update_User);
+	const vSelectProfilDefaut = document.getElementById(elt_Select_ProfilParDefautUpdate);
+	const vSelectPdnDefaut = document.getElementById(elt_Select_PdnParDefautUpdate);
+	const vLogin = GOAL_GetLoginFiche();
+
+	// ---------------------------------------------------------------- //
+	// CREATION d'un nouveau compte
+	// ---------------------------------------------------------------- //
+	if (vModeFiche === FICHE_CREATION) {
+
+		if (vLogin === "") {
+			new XWiki.widgets.Notification('Veuillez renseigner le login de l\'utilisateur !', 'error');
+			return;
+		}
+
+		if (vLoginDejaExistant) {
+			new XWiki.widgets.Notification('Cet utilisateur a deja un compte dans GOAL.', 'error');
+			return;
+		}
+
+		if (vSelectProfilDefaut.value === "") {
+			new XWiki.widgets.Notification('Veuillez renseigner le profil par defaut', 'error');
+			return;
+		}
+
+		// PDE : au moins une UO est requise quel que soit le profil
+		if (vinputListeUO.length === 0) {
+			new XWiki.widgets.Notification('Veuillez renseigner au moins un UO !', 'error');
+			return;
+		}
+
+		GOAL_Save(vLogin, vinputListeUO, vSelectProfilDefaut, vSelectPdnDefaut);
+		return;
+	}
+
+	// ---------------------------------------------------------------- //
+	// MODIFICATION - mode auto-service : seuls les programmes sont modifiables
+	// ---------------------------------------------------------------- //
+	if (mode === MODE_AUTO_PRG) {
+		GOAL_Save(vLogin, vinputListeUO, vSelectProfilDefaut, vSelectPdnDefaut);
+		return;
+	}
+
+	// ---------------------------------------------------------------- //
+	// MODIFICATION - mode administrateur : controles complets
+	// ---------------------------------------------------------------- //
+	if (vSelectProfilDefaut.value != "") {
+
+		if (vinputListeUO.length == 0) {
+			new XWiki.widgets.Notification('Veuillez renseigner au moins un UO !', 'error');
+			return;
+		}
+
+		GOAL_Save(vLogin, vinputListeUO, vSelectProfilDefaut, vSelectPdnDefaut);
+
+	} else {
+		// Dans le cas de la suppression des droits, le profil par defaut doit
+		// pouvoir etre mis a nul, mais les UO doivent alors etre retirees.
+		if (vSelectProfilDefaut.options.length <= 1) {
+
+			if (vinputListeUO.length != 0) {
+				new XWiki.widgets.Notification('Veuillez supprimer les UOs de l\'utilisateur !', 'error');
+				return;
+			}
+			GOAL_Save(vLogin, vinputListeUO, vSelectProfilDefaut, vSelectPdnDefaut);
+
+		} else {
+			new XWiki.widgets.Notification('Veuillez renseigner le profil par defaut.', 'error');
+		}
+	}
+}
+
+/**
+ * @description Enregistre la fiche. Endpoint et payload dependent du contexte :
+ *                - FICHE_CREATION -> type=NewUser,            payload complet
+ *                - MODE_ADMIN     -> type=SaveInfos,          payload complet
+ *                - MODE_AUTO_PRG  -> type=SaveProgrammesAuto, login + programmes
+ * @param {string} UserGOAL - Login de l'utilisateur
+ * @param {HTMLSelectElement} vinputListeUO - Select (selectize) de la liste des UO
+ * @param {HTMLSelectElement} vSelectProfilDefaut - Select du profil par defaut
+ * @param {HTMLSelectElement} vSelectPdnDefaut - Select du type de PDn par defaut
+ * @returns {Promise<boolean|void>} false en cas d'echec de la requete
+ */
+async function GOAL_Save(UserGOAL, vinputListeUO, vSelectProfilDefaut, vSelectPdnDefaut) {
+
+	if (debugMode) console.log("\n----- GOAL_Save -----");
+
+	const estCreation = (vModeFiche === FICHE_CREATION);
+
+	// --- Collecte des programmes coches
+	// Warning : contrat implicite, la valeur du programme est lue dans la
+	// DEUXIEME cellule de la ligne (cells[1]).
+	const ListProg = [];
+	GOAL_GetCheckboxesProgramme().forEach(cbPrg => {
+		if (cbPrg.checked) {
+			ListProg.push(cbPrg.closest('tr').cells[1].textContent.trim());
+		}
+	});
+	// Le tableau etant deja trie cote serveur, ce tri ne change rien
+	// aujourd'hui ; il garantit la valeur stockee si l'ordre d'affichage
+	// venait a evoluer.
+	ListProg.sort(GOAL_ComparerLibelles);
+
+	// --- Collecte des UO
+	// Tri avant enregistrement : la valeur stockee reste alphabetique, ce qui
+	// evite qu'un simple reordonnancement apparaisse comme une modification.
+	const ListUO = [];
+	for (let index = 0; index < vinputListeUO.length; index++) {
+		ListUO.push(vinputListeUO[index].value);
+	}
+	ListUO.sort(GOAL_ComparerLibelles);
+
+	// --- Endpoint
+	let vTypeSave;
+	if (estCreation) {
+		vTypeSave = "NewUser";
+	} else if (mode === MODE_AUTO_PRG) {
+		vTypeSave = "SaveProgrammesAuto";
+	} else {
+		vTypeSave = "SaveInfos";
+	}
+
+	// --- Payload
+	let requestBody;
+	if (vTypeSave === "SaveProgrammesAuto") {
+		requestBody = {
+			S_LoginUser: UserGOAL,
+			S_ListeProgramme: ListProg.join(',')
+		};
+
+	} else {
+		requestBody = {
+			S_LoginUser: UserGOAL,
+			S_ListeProgramme: ListProg.join(','),
+			S_ListeUO: ListUO.join(','),
+			S_ProfilParDefaut: vSelectProfilDefaut.value,
+			S_Type_PDN: vSelectPdnDefaut ? vSelectPdnDefaut.value : ''
+		};
+		PROFILS_GOAL.forEach(p => {
+			const vElt = document.getElementById(p.id);
+			requestBody[p.cle] = vElt ? vElt.checked : false;
+		});
+	}
+
+	if (debugMode) console.log("requestBody : ", requestBody);
+
+	const urlGestUserGroovy = new XWiki.Document('UGOAL_GestUserGroovy', 'USER_GOAL.Macro').getURL('get');
+	const urlGestUserGroovyRequest = urlGestUserGroovy
+		+ "?outputSyntax=plain&type=" + vTypeSave
+		+ "&Login=" + encodeURIComponent(UserGOAL);
+
+	let majStatus;
+	let majMessage = "";
+	const vMSGnotification = new XWiki.widgets.Notification('Enregistrement en cours...', 'inprogress');
+
+	GOAL_SetChargementBouton(elt_span_saveUserGOAL, elt_SaveLabel, true, "Enregistrement...");
+
+	try {
+		await fetch(
+			urlGestUserGroovyRequest,
+			{ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody) }
+		)
+			.then(response => response.json())
+			.then(response => {
+				majStatus = response.status;
+				majMessage = response.message || "";
+			});
+
+	} catch (e) {
+		console.error(e);
+		vMSGnotification.replace(new XWiki.widgets.Notification('Une erreur s\'est produite lors de l\'enregistrement', 'error'));
+		GOAL_SetChargementBouton(elt_span_saveUserGOAL, elt_SaveLabel, false);
+		return false;
+	}
+
+	if (majStatus == "success") {
+		vMSGnotification.replace(new XWiki.widgets.Notification("Enregistrement effectue", "done"));
+
+		// Creation et auto-service : la page est rechargee, l'etat de
+		// chargement est maintenu pour eviter toute nouvelle soumission.
+		if (estCreation || mode === MODE_AUTO_PRG) {
+			setTimeout(() => {
+				window.location.assign(
+					new XWiki.Document('UGOAL_FicheSpecifique', 'USER_GOAL.Macro').getURL('view') + complementURL
+				);
+			}, 700);
+			return;
+		}
+
+		GOAL_SetChargementBouton(elt_span_saveUserGOAL, elt_SaveLabel, false);
+		GOAL_SetModifie(false);
+
+	} else {
+		const vTexte = majMessage !== "" ? majMessage : 'Une erreur s\'est produite lors de l\'enregistrement';
+		vMSGnotification.replace(new XWiki.widgets.Notification(vTexte, 'error'));
+		GOAL_SetChargementBouton(elt_span_saveUserGOAL, elt_SaveLabel, false);
+	}
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////// Section : Initialisation
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * @description Sort le composant du conteneur XWiki et supprime ce dernier.
+ *              Les overlays eventuels sont remontes a la racine de <body>
+ *              avant la suppression pour ne pas etre detruits avec le conteneur.
+ */
+function GOAL_DeplacerHorsConteneurXWiki() {
+
+	const vComposant = document.querySelector('.ap-admin');
+	const vConteneurCible = document.querySelector('.main');
+	if (vComposant && vConteneurCible) {
+		vConteneurCible.appendChild(vComposant);
+	}
+
+	document.querySelectorAll('.goal-modal').forEach(vModal => {
+		document.body.appendChild(vModal);
+	});
+
+	const vConteneurXWiki = document.querySelector('#mainContentArea');
+	if (vConteneurXWiki) {
+		vConteneurXWiki.remove();
+	}
+}
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////// Section : Mise a jour du modele d'import
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * @description Passe le bouton de mise a jour du modele en etat de chargement.
+ *              Expose separement pour pouvoir encadrer un gestionnaire existant
+ *              sans reprendre la logique d'appel : appeler cette fonction avant
+ *              le traitement, et GOAL_TerminerMajModeleImport() apres.
+ */
+function GOAL_DemarrerMajModeleImport() {
+	GOAL_SetChargementBouton(elt_btnMajModeleImport, elt_MajModeleImportLabel, true, "Mise a jour en cours...");
+}
+
+/**
+ * @description Restaure le bouton de mise a jour du modele.
+ */
+function GOAL_TerminerMajModeleImport() {
+	GOAL_SetChargementBouton(elt_btnMajModeleImport, elt_MajModeleImportLabel, false);
+}
+
+/**
+ * @description Regenere le modele d'import GOAL.
+ *              La regeneration porte sur un classeur complet : elle prend
+ *              plusieurs secondes, pendant lesquelles le bouton doit signaler
+ *              l'attente et refuser tout nouveau clic.
+ *
+ *              Warning : le nom de cette fonction est conserve tel quel, il
+ *              peut etre reference ailleurs dans l'application.
+ * @returns {Promise<void>}
+ */
+async function fctMajModeleImportGOAL() {
+
+	if (debugMode) console.log("\n----- fctMajModeleImportGOAL -----");
+
+	const urlImportGroovy = new XWiki.Document(DOC_MAJ_MODELE_IMPORT.page, DOC_MAJ_MODELE_IMPORT.space).getURL('get');
+	const urlMajModele = urlImportGroovy + "?outputSyntax=plain&type=MajModeleImportGOAL";
+
+	// Notification remplacable plutot qu'une notification finale isolee :
+	// l'utilisateur suit une seule ligne du debut a la fin du traitement.
+	const vMSGnotification = new XWiki.widgets.Notification('Mise a jour du modele en cours...', 'inprogress');
+
+	GOAL_DemarrerMajModeleImport();
+
+	let majStatus;
+
+	try {
+		await fetch(urlMajModele)
+			.then(response => response.json())
+			.then(response => { majStatus = response.status; });
+
+	} catch (e) {
+		// La version precedente n'avait pas de catch : une coupure reseau
+		// laissait la notification "en cours" indefiniment a l'ecran.
+		console.error(e);
+		vMSGnotification.replace(new XWiki.widgets.Notification('Une erreur s\'est produite lors de la mise a jour du modele', 'error'));
+		return;
+
+	} finally {
+		// Restauration systematique : le bouton doit redevenir utilisable
+		// y compris sur le chemin d'erreur, la page n'etant pas rechargee.
+		GOAL_TerminerMajModeleImport();
+	}
+
+	if (majStatus == "success") {
+		vMSGnotification.replace(new XWiki.widgets.Notification("Modele mis a jour", "done"));
+	} else {
+		vMSGnotification.replace(new XWiki.widgets.Notification('Une erreur s\'est produite lors de la mise a jour du modele', 'error'));
+	}
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////// Section : Filtre de recherche de la liste
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/** Bouton de reinitialisation du filtre */
+const elt_btnResetFiltre = "GOALUser_resetfilter";
+const elt_InputFiltre = "Input_UserFilter";
+
+/**
+ * @description Retire des caracteres susceptibles de perturber la requete XWQL
+ *              construite cote velocity. Le nettoyage y est refait, celui-ci
+ *              evite simplement de propager une saisie douteuse dans l'URL.
+ * @param {string} valeur - Saisie brute
+ * @returns {string} Saisie nettoyee
+ */
+function GOAL_NettoyerFiltre(valeur) {
+	return (valeur || '')
+		.replace(/"/g, '')
+		.replace(/\\/g, '')
+		.replace(/\'/g, '')
+		.replace(/\`/g, '')
+		.trim();
+}
+
+/**
+ * @description Retourne le filtre actuellement applique, lu dans l'URL.
+ *              A distinguer du contenu du champ de saisie, qui peut avoir ete
+ *              modifie sans que la recherche ait ete relancee.
+ * @returns {string} Filtre actif, chaine vide si aucun
+ */
+function GOAL_FiltreActif() {
+	return vQueryParams['Filter'] ? String(vQueryParams['Filter']) : "";
+}
+
+/**
+ * @description Construit l'URL de la liste en conservant le profil et l'ordre
+ *              de tri courants. Utilisee par la recherche comme par la
+ *              reinitialisation, afin que les deux se comportent identiquement.
+ * @param {string} filtre - Filtre a appliquer, chaine vide pour aucun
+ * @returns {string} URL complete
+ */
+function GOAL_ConstruireURLListe(filtre) {
+
+	const vParams = [];
+
+	if (profilCourant && profilCourant !== "" && profilCourant !== "undefined") {
+		vParams.push("profil=" + encodeURIComponent(profilCourant));
+	}
+	if (filtre && filtre !== "") {
+		vParams.push("Filter=" + encodeURIComponent(filtre));
+	}
+	const vSort = vQueryParams['sortOrder'] ? String(vQueryParams['sortOrder']) : "";
+	if (vSort !== "") {
+		vParams.push("sortOrder=" + encodeURIComponent(vSort));
+	}
+
+	const vBase = new XWiki.Document('UGOAL_FicheSpecifique', 'USER_GOAL.Macro').getURL('view');
+	return (vParams.length > 0) ? vBase + "?" + vParams.join("&") : vBase;
+}
+
+/**
+ * @description Affiche le bouton de reinitialisation uniquement lorsqu'il a un
+ *              effet : champ renseigne, ou filtre deja applique.
+ */
+function GOAL_MajBoutonResetFiltre() {
+	const vInput = document.getElementById(elt_InputFiltre);
+	const vSaisie = vInput ? vInput.value.trim() : "";
+	GOAL_Afficher(elt_btnResetFiltre, (vSaisie !== "" || GOAL_FiltreActif() !== ""));
+}
+
+/**
+ * @description Lance la recherche sur la saisie courante.
+ */
+function GOAL_AppliquerFiltre() {
+	const vInput = document.getElementById(elt_InputFiltre);
+	const vFiltre = GOAL_NettoyerFiltre(vInput ? vInput.value : "");
+	window.location.assign(GOAL_ConstruireURLListe(vFiltre));
+}
+
+/**
+ * @description Reinitialise le filtre de recherche.
+ *              Si un filtre est applique, la page est rechargee sans le
+ *              parametre Filter. Sinon, le champ est simplement vide : inutile
+ *              de recharger la page pour une saisie jamais validee.
+ */
+function GOAL_ReinitialiserFiltre() {
+
+	const vInput = document.getElementById(elt_InputFiltre);
+	if (vInput) vInput.value = "";
+
+	if (GOAL_FiltreActif() !== "") {
+		window.location.assign(GOAL_ConstruireURLListe(""));
+		return;
+	}
+
+	GOAL_MajBoutonResetFiltre();
+	if (vInput) vInput.focus();
+}
+
+/**
+ * @description Branche l'ensemble des ecouteurs d'evenements de la page.
+ *              Tous les acces au DOM sont proteges : les blocs administrateur
+ *              peuvent ne pas etre rendus par le velocity selon le profil.
+ */
+function GOAL_InitEvenements() {
+
+	// --- Filtre utilisateur (administrateur)
+	const spanGOALUser_applyfilter = document.getElementById("GOALUser_applyfilter");
+	if (spanGOALUser_applyfilter) {
+		spanGOALUser_applyfilter.addEventListener("click", GOAL_AppliquerFiltre);
+	}
+
+	const vBtnResetFiltre = document.getElementById(elt_btnResetFiltre);
+	if (vBtnResetFiltre) {
+		vBtnResetFiltre.addEventListener("click", GOAL_ReinitialiserFiltre);
+	}
+
+	// --- Entree pour rechercher, Echap pour reinitialiser
+	const vInputFilter = document.getElementById(elt_InputFiltre);
+	if (vInputFilter) {
+		vInputFilter.addEventListener("keydown", (e) => {
+			if (e.key === "Enter")  { e.preventDefault(); GOAL_AppliquerFiltre(); }
+			if (e.key === "Escape") { e.preventDefault(); GOAL_ReinitialiserFiltre(); }
+		});
+		vInputFilter.addEventListener("input", GOAL_MajBoutonResetFiltre);
+	}
+
+	GOAL_MajBoutonResetFiltre();
+
+	// --- Mise a jour du modele d'import (administrateur)
+	// Warning : branchement unique. Si l'ancien couple listener + fonction
+	// subsiste dans un autre fichier, le retirer sous peine de declencher
+	// la regeneration deux fois par clic.
+	const button_MajModeleImportGOAL = document.getElementById(elt_btnMajModeleImport);
+	if (button_MajModeleImportGOAL) {
+		button_MajModeleImportGOAL.addEventListener("click", fctMajModeleImportGOAL);
+	}
+
+	// --- Revue de compte (administrateur)
+	const vSpanGOAL_RevueCompte = document.getElementById('SpanGOAL_RevueCompte');
+	if (vSpanGOAL_RevueCompte) {
+		vSpanGOAL_RevueCompte.addEventListener("click", () => {
+			window.location.assign(new XWiki.Document('UGOAL_TableRevue', 'USER_GOAL.Macro').getURL('view') + complementURL);
+		});
+	}
+
+	// --- Fermeture / annulation de la fiche
+	const vspanCloseEdit = document.getElementById(elt_span_closeEditUserGOAL);
+	if (vspanCloseEdit) {
+		vspanCloseEdit.addEventListener("click", GOAL_FermerFiche);
+	}
+
+	// --- Programmes : coherence + suivi des modifications
+	GOAL_GetCheckboxesProgramme().forEach(checkbox => {
+		checkbox.addEventListener('change', GOAL_NotifierModification);
+	});
+
+	// --- UO (le callback selectize appelle aussi cette fonction)
+	const vUOUpdate = document.getElementById(elt_Input_Liste_UO_Update_User);
+	if (vUOUpdate) {
+		vUOUpdate.addEventListener('change', GOAL_NotifierModification);
+	}
+
+	// --- Profils
+	PROFILS_GOAL.forEach(p => {
+		const vElt = document.getElementById(p.id);
+		if (vElt) vElt.addEventListener('change', GOAL_NotifierModification);
+	});
+
+	// --- Profil par defaut et type de PDn
+	[elt_Select_ProfilParDefautUpdate, elt_Select_PdnParDefautUpdate].forEach(id => {
+		const vElt = document.getElementById(id);
+		if (vElt) vElt.addEventListener('change', GOAL_NotifierModification);
+	});
+
+	// --- Selecteur de login en creation
+	// Le widget selectize est initialise ailleurs : on se branche sur l'element
+	// natif, ce qui couvre le cas ou son onChange n'appellerait pas deja
+	// GOAL_NewUser_Login_Check().
+	const vSelectLogin = document.getElementById(elt_Select_Login_NewUser);
+	if (vSelectLogin) {
+		vSelectLogin.addEventListener('change', GOAL_NewUser_Login_Check);
+	}
+}
+
+/**
+ * @description Chargement automatique de la fiche de l'utilisateur courant
+ *              pour les modes non administrateur (lecture et auto-service).
+ */
+function GOAL_InitChargementAuto() {
+
+	if (mode === MODE_ADMIN) return;
+
+	require(['xwiki-meta'], function (xm) {
+		const xwiki_user = XWiki.Model.serialize(xm.userReference);
+		const loginUser = xwiki_user.substring(12, xwiki_user.length);
+		GOAL_GestUser_EditRequest(loginUser);
+	});
+}
+
+// --- Point d'entree
+document.addEventListener('DOMContentLoaded', function () {
+	GOAL_DeplacerHorsConteneurXWiki();
+	GOAL_InitEvenements();
+	GOAL_SetModifie(false);
+	GOAL_InitChargementAuto();
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 {{velocity}}
 	{{include document="ContextGOAL.Macro.GOALGlobalHeader"/}}
 	{{include document="Generique.Composant.Bouton"/}}
@@ -409,13 +1939,16 @@
 
 				## Warning : ne PAS inserer d'espace entre <input> et <span>,
 				## le script de la liste des profils lit checkbox.nextSibling.textContent
+				## Warning : ordre alphabetique des libelles. La liste deroulante du
+				## profil par defaut est construite a partir de l'ordre du DOM par
+				## le script de bas de page : les deux restent ainsi coherents.
 				<div id="div_Liste_Profil" class="ug-checklist">
-					<label class="ug-check"><input type="checkbox" id="$idProfilProgrammeID" name="$labelDroitProfilProgramme"><span>$labelProfilProgramme</span></label>
+					<label class="ug-check"><input type="checkbox" id="$idProfilAdminID" name="$labelDroitProfilAdmin"><span>$labelProfilAdmin</span></label>
+					<label class="ug-check"><input type="checkbox" id="$idProfilAdminFonctID" name="$labelDroitProfilAdminFonct"><span>$labelProfilAdminFonct</span></label>
+					<label class="ug-check"><input type="checkbox" id="$idProfilAdminGicaID" name="$labelDroitProfilAdminGica"><span>$labelProfilAdminGica</span></label>
 					<label class="ug-check"><input type="checkbox" id="$idProfilMetierID" name="$labelDroitProfilMetier"><span>$labelProfilMetier</span></label>
 					<label class="ug-check"><input type="checkbox" id="$idProfilPilotageID" name="$labelDroitProfilPilotage"><span>$labelProfilPilotage</span></label>
-					<label class="ug-check"><input type="checkbox" id="$idProfilAdminID" name="$labelDroitProfilAdmin"><span>$labelProfilAdmin</span></label>
-					<label class="ug-check"><input type="checkbox" id="$idProfilAdminGicaID" name="$labelDroitProfilAdminGica"><span>$labelProfilAdminGica</span></label>
-					<label class="ug-check"><input type="checkbox" id="$idProfilAdminFonctID" name="$labelDroitProfilAdminFonct"><span>$labelProfilAdminFonct</span></label>
+					<label class="ug-check"><input type="checkbox" id="$idProfilProgrammeID" name="$labelDroitProfilProgramme"><span>$labelProfilProgramme</span></label>
 				</div>
 
 				<div class="ug-grid" style="margin-top:14px">
@@ -577,3 +2110,113 @@
 </script>
 	{{/html}}
 {{/velocity}}
+
+
+
+
+
+
+
+
+
+
+
+
+
+/**
+ * GOAL PDE - Initialisation du widget selectize des unites organisationnelles
+ * USER_GOAL.Macro.UGOAL_FicheSpecifique
+ *
+ * Alimente le selecteur Input_Liste_UO_Update_User a partir du referentiel
+ * DataGOAL.ContextGOAL.GOAL_Metadata_S_UO_Pilote. Le selecteur reste large
+ * ([id*="Input_Liste_UO"]) pour rester tolerant a d'eventuels autres champs.
+ *
+ * Warning : le callback onChange est le SEUL point de detection fiable des
+ * modifications d'UO. Selectize masque l'element d'origine et ne propage pas
+ * systematiquement d'evenement 'change' exploitable sur celui-ci. C'est donc
+ * ici qu'est declenchee la notification qui active le bouton d'enregistrement.
+ */
+require(['jquery', 'xwiki-selectize'], function ($) {
+
+	/**
+	 * Collateur francais partage : un tri par localeCompare sans locale
+	 * explicite depend de la configuration du navigateur, et un tri brut
+	 * rejetterait les libelles accentues apres le Z.
+	 * 'accent' -> insensible a la casse, sensible aux accents pour le departage.
+	 */
+	const vCollateur = new Intl.Collator('fr', { sensitivity: 'accent' });
+
+	const GOAL_Metadata_base = (new XWiki.Document('GOAL_Metadata_base', 'DataGOAL.ContextGOAL')).getURL('get', '&outputSyntax=plain');
+
+	[...document.querySelectorAll('[id*="Input_Liste_UO"]')].forEach(el => {
+
+		const $el = $(el);
+
+		$el.xwikiSelectize({
+
+			/**
+			 * @description Charge les UO du referentiel, filtrees sur la saisie.
+			 * @param {string} query - Texte saisi par l'utilisateur
+			 * @param {Function} cb - Callback selectize
+			 */
+			load: (query, cb) => {
+				fetch(
+					GOAL_Metadata_base.replace('base', 'S_UO_Pilote')
+				).then(
+					response => response.json()
+				).then(
+					response => {
+						cb(
+							response.filter(
+								o => o['value'].includes(query)
+							).sort(
+								(a, b) => vCollateur.compare(a['value'], b['value'])
+							).map(
+								it => ({ label: it['value'], value: it['value'] })
+							)
+						);
+					}
+				).catch(
+					err => {
+						console.error(err);
+						cb({});
+					}
+				);
+			},
+
+			/**
+			 * @description Active le suivi des modifications de la fiche.
+			 *              La fonction appelee est definie dans
+			 *              UGOAL_FicheSpecifique.js : on verifie sa presence pour
+			 *              rester tolerant aux profils ou la fiche n'est pas rendue.
+			 *              L'appel est ignore pendant le chargement du formulaire
+			 *              (drapeau vChargementEnCours cote fiche).
+			 * @param {string|Array} value - Nouvelle valeur du selectize
+			 */
+			onChange: (value) => {
+				if (typeof GOAL_NotifierModification === 'function') {
+					GOAL_NotifierModification();
+				}
+			},
+
+			/**
+			 * @description Restitue l'option supprimee dans la liste des choix.
+			 * @param {Array} values - Valeurs retirees
+			 */
+			onDelete: (values) => {
+				setTimeout(
+					(oldOption) => {
+						el.selectize.addOption(oldOption);
+						el.selectize.refreshOptions();
+					},
+					100,
+					{ ...el.selectize.options[values[0]] }
+				);
+			},
+
+			maxOptions: 1000,
+			create: false,
+			hideSelected: false
+		});
+	});
+});
