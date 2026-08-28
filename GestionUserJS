@@ -16,6 +16,8 @@
  *   visibles dans la liste, cochées, et se décochent d'un clic.
  * - Le champ conserve une hauteur d'une ligne ; une pastille indique le nombre
  *   de valeurs sélectionnées.
+ * - Une loupe ancrée à gauche et un libellé de saisie signalent la zone de
+ *   recherche même lorsque des badges occupent la ligne.
  *
  * Dépendances : RequireJS, jquery, xwiki-selectize (Selectize 0.12.5)
  */
@@ -44,12 +46,19 @@
 
     /**
      * const {number} Nombre de valeurs à partir duquel la pastille apparaît.
-     *        À 2, une sélection unique reste lisible sans surcharge visuelle.
      */
     const SEUIL_COMPTEUR = 1;
 
     /** const {string} Indication affichée si le plafond serveur est atteint */
     const TEXTE_AFFINER = 'Trop de valeurs : saisissez pour affiner la recherche';
+
+    /**
+     * const {string} Libellé de la zone de saisie lorsque des valeurs sont déjà
+     *        retenues. Selectize retire le placeholder d'origine dès le premier
+     *        item ; sans ce texte de relais, le champ devient une zone muette
+     *        coincée entre les badges.
+     */
+    const TEXTE_RECHERCHE = 'Rechercher…';
 
     /** const {Array<string>} Champs dont les valeurs dépendent de l'UO sélectionnée */
     const CHAMPS_DEPENDANTS_UO = ['S_Destinataire', 'S_Contributeur', 'S_ActionReq'];
@@ -109,6 +118,55 @@
         }
 
         indication.style.display = tronque ? 'block' : 'none';
+    };
+
+    // =========================================================================
+    // ZONE DE SAISIE
+    // =========================================================================
+
+    /**
+     * description  Réinstalle un libellé sur le champ de saisie interne.
+     *
+     *              updatePlaceholder() de Selectize retire le placeholder dès
+     *              qu'une valeur est retenue. Le champ devient alors une zone
+     *              vide au milieu des badges, que rien ne désigne comme
+     *              saisissable. On y remet un libellé d'action, distinct du
+     *              placeholder d'origine qui, lui, nomme le filtre.
+     *
+     * param        {Object} instance - instance Selectize
+     * returns      {void}
+     */
+    const majLibelleSaisie = (instance) => {
+        if (!instance || !instance.$control_input) return;
+
+        const saisie = instance.$control_input[0];
+        if (!saisie) return;
+
+        if (instance.items.length) {
+            saisie.setAttribute('placeholder', TEXTE_RECHERCHE);
+        } else {
+            saisie.removeAttribute('placeholder');
+        }
+    };
+
+    /**
+     * description  Ajoute la loupe du filtre si elle n'existe pas encore.
+     *
+     *              Ancrée dans le conteneur et non dans le champ : le champ
+     *              défile horizontalement dès que les badges dépassent, la
+     *              loupe doit rester fixe. Elle marque la zone de recherche
+     *              quel que soit le nombre de valeurs affichées.
+     *
+     * param        {HTMLElement} wrapper - div.rf-selectize du filtre
+     * returns      {void}
+     */
+    const ajouterLoupe = (wrapper) => {
+        if (!wrapper || wrapper.querySelector('.rf-selectize__search')) return;
+
+        const loupe = document.createElement('span');
+        loupe.className = 'rf-selectize__search';
+        loupe.setAttribute('aria-hidden', 'true');
+        wrapper.appendChild(loupe);
     };
 
     // =========================================================================
@@ -173,8 +231,12 @@
      */
     const synchroniserInputCache = (champ, valeurs) => {
         const liste = (Array.isArray(valeurs) ? valeurs : (valeurs ? [valeurs] : [])).filter(Boolean);
-        const cache = document.getElementById('RapidFilterSelectInput' + champ); if (cache) cache.value = liste.join(SEPARATEUR);
-        const wrapper = document.getElementById('RapidFilterSelectWrapper' + champ); if (wrapper) majCompteur(wrapper, liste);
+
+        const cache = document.getElementById('RapidFilterSelectInput' + champ);
+        if (cache) cache.value = liste.join(SEPARATEUR);
+
+        const wrapper = document.getElementById('RapidFilterSelectWrapper' + champ);
+        if (wrapper) majCompteur(wrapper, liste);
 
         if (DEBUG) console.log(`[FiltreRapide] ${champ} = "${liste.join(SEPARATEUR)}"`);
     };
@@ -370,11 +432,11 @@
         const plugins = (maxItems === 1) ? [] : ['remove_button'];
 
         /**
-        * Étiquette permanente du filtre. Rendue par la macro Velocity : le bloc
-        * ci-dessous n'est qu'un repli défensif si le wrapper n'en porte pas.
-        * Le libellé provient de data-libelle et non de data-placeholder, les
-        * deux textes étant désormais distincts.
-        */
+         * Étiquette permanente du filtre. Rendue par la macro Velocity : le bloc
+         * ci-dessous n'est qu'un repli défensif si le wrapper n'en porte pas.
+         * Le libellé provient de data-libelle et non de data-placeholder, les
+         * deux textes étant désormais distincts.
+         */
         const wrapper = document.getElementById('RapidFilterSelectWrapper' + champ);
         if (wrapper && !wrapper.querySelector('.rf-selectize__label')) {
             const etiquette = document.createElement('span');
@@ -382,6 +444,10 @@
             etiquette.textContent = select.dataset.libelle || select.dataset.placeholder || '';
             wrapper.insertBefore(etiquette, wrapper.firstChild);
         }
+
+        // Loupe de la zone de saisie, ajoutée avant l'initialisation Selectize
+        // pour qu'elle soit en place dès le premier rendu.
+        ajouterLoupe(wrapper);
 
         $el.xwikiSelectize({
             valueField: 'value',
@@ -414,8 +480,6 @@
             // unique il n'y a rien à enchaîner, et la laisser ouverte masquerait
             // le champ qu'on vient de renseigner.
             closeAfterSelect: (maxItems === 1),
-
-            copyClassesToDropdown: true,
 
             render: {
 
@@ -557,8 +621,12 @@
                 valInit.forEach(valeur => this.addOption({ value: valeur, label: valeur }));
                 this.setValue(valInit, true);
 
-                const wrapper = document.getElementById('RapidFilterSelectWrapper' + champ);
-                if (wrapper) majCompteur(wrapper, valInit);
+                const conteneur = document.getElementById('RapidFilterSelectWrapper' + champ);
+                if (conteneur) majCompteur(conteneur, valInit);
+
+                // setValue silencieux : onChange ne passe pas, le libellé de
+                // saisie doit donc être installé explicitement.
+                majLibelleSaisie(this);
             },
 
             /**
@@ -568,6 +636,7 @@
             onChange: function (valeurs) {
                 synchroniserInputCache(champ, valeurs);
                 majCasesCochees(this);
+                majLibelleSaisie(this);
 
                 if (champ === 'S_UO_Pilote') {
                     // Le périmètre des destinataires / contributeurs / approbateurs
@@ -583,16 +652,29 @@
                 marquerFiltresModifies();
             },
 
+            /**
+             * description  updatePlaceholder() de Selectize s'exécute à chaque
+             *              prise de focus et efface le libellé de saisie : on le
+             *              repose après coup.
+             */
+            onFocus: function () {
+                majLibelleSaisie(this);
+            },
+
             onDropdownOpen: function () {
                 majCasesCochees(this);
+                majLibelleSaisie(this);
                 verrouillerLargeurListe(this, champ);
             },
+
             /**
              * description Au blur, le champ revient en début de liste.
              */
             onBlur: function () {
                 const champDOM = this.$control && this.$control[0];
                 if (champDOM) champDOM.scrollLeft = 0;
+
+                majLibelleSaisie(this);
             }
         });
 
@@ -646,10 +728,10 @@
         }
 
         /**
-        * Clic sur une valeur du champ : ouvre la liste au lieu de sélectionner
-        * l'item. Sans cela il fallait viser l'espace libre entre les badges.
-        * Le bouton de retrait garde son comportement propre.
-        */
+         * Clic sur une valeur du champ : ouvre la liste au lieu de sélectionner
+         * l'item. Sans cela il fallait viser l'espace libre entre les badges.
+         * Le bouton de retrait garde son comportement propre.
+         */
         instance.$control.on('mousedown', '.item', function (evenement) {
             if (evenement.target.closest('.remove')) return;
 
