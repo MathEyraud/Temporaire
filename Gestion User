@@ -1,106 +1,579 @@
-## 1. Où trier ?
+{{velocity}}
+	{{include document="ContextGOAL.Macro.GOALGlobalHeader"/}}
+	{{include document="Generique.Composant.Bouton"/}}
+	#set ($discard = $xwiki.ssx.use('USER_GOAL.Macro.UGOAL_FicheSpecifique'))
+	#set ($discard = $xwiki.jsx.use('USER_GOAL.Macro.UGOAL_FicheSpecifique'))
 
-Le tri doit idéalement se faire **à la source**, dans la macro `#TabSpeDisplayRapidefilter` qui construit la liste des valeurs. Je n'ai pas son code dans le projet — si tu me le partages, je te livre la modification exacte. En attendant, voici les deux niveaux d'intervention possibles.
+	#set ($discard = $xwiki.ssx.use("Generique.Composant.Bouton"))
 
-## 2. Solution recommandée — tri à la source (Velocity)
+	#set ($showcomments=false)
+	#set ($showattachments=false)
+	#set ($showhistory=false)
+	#set ($showinformation=false)
 
-### 2.1 Si la liste vient d'une requête HQL/XWQL
+	#set($imgFloppyURL = $documentGOALIcon.getAttachmentURL("floppy.svg"))
+	#set($imgEditPencilURL = $documentGOALIcon.getAttachmentURL("pencil.svg"))
+	#set($imgAddUserURL = $documentGOALIcon.getAttachmentURL("plus-lg.svg"))
+	#set($imgXURL = $documentGOALIcon.getAttachmentURL("x-lg.svg"))
+	#set($imgPersonLineURL = $documentGOALIcon.getAttachmentURL("person-lines-fill.svg"))
 
-Ajouter un `order by` insensible à la casse directement dans la requête :
+	#set($CurrentProfil = $request.profil)
 
-```velocity
-## Tri alphabétique insensible à la casse, réalisé côté base
-#set($hqlProgrammes = "select distinct s_prgm.value
-        from BaseObject o, StringProperty s_prgm
-        where o.className = 'EcheancierGOAL.Classe.EcheancierGOALClass'
-            and s_prgm.id.id = o.id
-            and s_prgm.name = 'S_Programme'
-            and s_prgm.value is not null
-            and s_prgm.value <> ''
-        order by lower(s_prgm.value)")
-#set($listeProgrammes = $services.query.hql($hqlProgrammes).execute())
-```
+	## ------------------------------------------------------------------ ##
+	## DROITS DE LA PAGE - MODULE PDE                                      ##
+	## Les controles sont adosses a l'appartenance reelle aux groupes XWiki
+	## et non au seul parametre ?profil= de l'URL, pilotable par le client.
+	##                                                                     ##
+	## $estAdminGOAL : administrateur GOAL (liste des comptes, creation)
+	## $estAdminGica : administrateur RSAP
+	## $estAdmin     : l'un ou l'autre => edition complete
+	## $estAutoPrg   : profil Programme => auto-service sur SON perimetre
+	## ------------------------------------------------------------------ ##
+	#set($estAdminGOAL = ($CurrentProfil == 'DroitsProfilsADMINI' && $contextUser.isUserInGroup("XWiki.GOALUserAdmin")))
+	#set($estAdminGica = ($CurrentProfil == 'DroitsProfilsADGICA' && $contextUser.isUserInGroup("XWiki.GOALUserAdmGica")))
+	#set($estAdmin     = ($estAdminGOAL || $estAdminGica))
+	#set($estAutoPrg   = ($CurrentProfil == 'DroitsProfilsPROGME' && $contextUser.isUserInGroup("XWiki.GOALUserGrpPGME")))
+	#set($estModifiable = ($estAdmin || $estAutoPrg))
 
-C'est l'option la plus performante : aucun traitement supplémentaire côté serveur d'application, et le tri est stable quel que soit le volume.
+	## Profils voyant la section des profils et le perimetre programme
+	#set($voitProfils   = ($CurrentProfil == 'DroitsProfilsADMINI' || $CurrentProfil == 'DroitsProfilsADGICA' || $CurrentProfil == 'DroitsProfilsADFONC'))
+	#set($voitProgramme = ($voitProfils || $CurrentProfil == 'DroitsProfilsPROGME'))
 
-### 2.2 Si la liste est déjà construite en mémoire (métadonnées, contexte…)
+	#set($CurrentFilter = $request.Filter)
+	#set($sortOrder = $request.sortOrder)
 
-```velocity
-## Tri alphabétique de la liste avant affichage
-#set($listeProgrammesTriee = $collectiontool.sort($listeProgrammes))
-```
+	#set ($CurrentUser = $xcontext.getUser())
+	#set ($CurrentUserLogin = $CurrentUser.substring(12,$CurrentUser.length()))
 
-⚠️ `$collectiontool.sort` applique l'ordre naturel de Java : les majuscules passent avant les minuscules et les accents se placent après `Z`. Acceptable si les codes programmes sont normalisés en majuscules non accentuées (cas fréquent sur PDA) ; sinon, préférer le tri en base du 2.1.
+	## Referentiel des programmes PDE
+	#set ($documentMetadataGOALTrigramme = 'DataGOAL.ContextGOAL.GOAL_Metadata_R_LotPrg')
+	#set ($contentGOALMetadataTrig = $xwiki.getDocument($documentMetadataGOALTrigramme).getContent())
+	#set ($jsonProg = $jsontool.parse($contentGOALMetadataTrig))
 
-## 3. Solution immédiate — tri du DOM côté client
+	## --------------------------------------------- ##
+	## Valeurs de parametrage des differents profils ##
+	## Warning : ces ids alimentent la table PROFILS_GOAL du JavaScript
+	## --------------------------------------------- ##
+	#set($idProfilProgrammeID = "profilProgrammeID")
+	#set($idProfilMetierID = "profilMetierID")
+	#set($idProfilPilotageID = "profilPilotageID")
+	#set($idProfilAdminID = "profilAdminID")
+	#set($idProfilAdminGicaID = "profilAdminGicaID")
+	#set($idProfilAdminFonctID = "profilAdminFonctID")
 
-Applicable sans toucher à la macro, si tu veux valider le rendu rapidement.
+	#set($labelProfilProgramme = "Programme")
+	#set($labelProfilMetier = "Metier")
+	#set($labelProfilPilotage = "Pilotage")
+	#set($labelProfilAdmin = "Admin")
+	#set($labelProfilAdminGica = "Admin RSAP")
+	#set($labelProfilAdminFonct = "Admin Fonctionnel")
 
-```velocity
-{{html clean="false"}}
+	#set($labelDroitProfilProgramme = "DroitsProfilsPROGME")
+	#set($labelDroitProfilMetier = "DroitsProfilsMetier")
+	#set($labelDroitProfilPilotage = "DroitsProfilsCELPIL")
+	#set($labelDroitProfilAdmin = "DroitsProfilsADMINI")
+	#set($labelDroitProfilAdminGica = "DroitsProfilsADGICA")
+	#set($labelDroitProfilAdminFonct = "DroitsProfilsADFONC")
+
+	#set($elt_Select_ProfilParDefautUpdate = "Select_ProfilParDefautUpdate")
+	#set($elt_Select_PdnParDefautUpdate = "Select_Select_PdnParDefautUpdate")
+
+{{/velocity}}{{velocity output="false"}}
+	#try()
+		#set($hqlProgramme = "select v.value 
+								 from BaseObject o, StringProperty k, StringProperty v
+								 where o.className='DonneesOPTI.Classe.DonneesOPTIClass' 
+									and k.id.id=o.id 
+									and k.name='S_Type' 
+									and k.value='Trigramme' 
+									and v.id.id=o.id 
+									and v.name='S_Trigramme'
+								 order by v.value")
+		#set($ListeProgramme = $services.query.hql($hqlProgramme).execute())
+	#end
+
+	## Liste des types de PDn parametree dans le contexte GOAL
+	#set ($documentContextGOAL = 'DataGOAL.ContextGOAL.ContextGOALElement')
+	#set ($contextGOALDoc = $xwiki.getDocument($documentContextGOAL))
+	#set ($classNameContext = 'ContextGOAL.Classe.ContextGOALClass')
+	#set ($contextGOAL = $contextGOALDoc.getObject("$classNameContext"))
+	#set ($ListeTypePDn = $contextGOAL.getProperty('T_LST_PDN').getValue())
+
+	#set($ListeUserGOAL = [])
+
+	#try()
+		#set($xwqlUserGOAL = "SELECT obj.S_LoginUser, obj.S_ListeProgramme, obj.S_ListeUO, obj.S_ProfilParDefaut FROM Document doc, doc.object(USER_GOAL.Classe.USER_GOALClass) obj WHERE doc.space='DataGOAL.USER_GOAL'")
+
+		#if ($CurrentFilter)
+			#set($CurrentFilter = $CurrentFilter.replace("'", ""))
+			#set($CurrentFilter = $CurrentFilter.replace("\", ""))
+			#set($CurrentFilter = $CurrentFilter.replace("`", ""))
+			#set($CurrentFilter = $CurrentFilter.replace('"', ""))
+			#set($xwqlUserGOAL = $xwqlUserGOAL + " and obj.S_LoginUser like :bindCurrentFilter")
+		#end
+
+		#set($queryListUser = $services.query.xwql($xwqlUserGOAL))
+		#if ($CurrentFilter)
+			#set($queryListUser = $queryListUser.bindValue('bindCurrentFilter', '%' + ${CurrentFilter} + '%'))
+		#end
+
+		#set($ListeUserGOAL = $queryListUser.execute())
+	#end
+
+	#set($URLFicheUserGoal = $xwiki.getURL("USER_GOAL.Macro.UGOAL_FicheSpecifique")+"?profil=${CurrentProfil}")
+
+	## Variable pour stocker l'ordre de tri (0 = croissant, 1 = decroissant)
+	#if(!$sortOrder)
+		#set($sortOrder = 0)
+	#end
+
+	#if("$!request.sortOrder" == "1")
+		#set($sortOrder = 1)
+	#else
+		#set($sortOrder = 0)
+	#end
+
+{{/velocity}}{{groovy}}
+
+	// Recuperation des variables depuis le binding
+	def listeOriginal = ListeUserGOAL;
+	def sortOrder = sortOrder; // 0 = croissant, 1 = decroissant
+
+	def listeTriee = new ArrayList();
+	for (def element : listeOriginal) {
+		listeTriee.add(element);
+	}
+
+	listeTriee.sort { a, b ->
+		def valeurA = a[0] ? a[0].toString() : '';
+		def valeurB = b[0] ? b[0].toString() : '';
+
+		if (sortOrder == 0) {
+			return valeurA.compareToIgnoreCase(valeurB); // Croissant
+		} else {
+			return valeurB.compareToIgnoreCase(valeurA); // Decroissant
+		}
+	}
+
+	binding.setVariable("listeTriee", listeTriee);
+
+
+	// ------------------------------------------------------------------ //
+	// Tri alphabetique du referentiel des programmes
+	//
+	// $jsonProg provient de $jsontool.parse() : l'ordre y est celui du
+	// document de metadonnees, qui suit l'ordre de saisie et non l'alphabet.
+	// Le tri est fait ici plutot qu'en Velocity, $collectiontool.sort()
+	// s'appuyant sur l'introspection de bean et non sur l'acces par cle.
+	//
+	// Collator FRENCH : un tri brut placerait "Zebre" avant "Ecole" des lors
+	// qu'un libelle porte un accent, les caracteres accentues ayant un code
+	// superieur aux lettres non accentuees.
+	// ------------------------------------------------------------------ //
+	def listeProgTriee = new ArrayList();
+
+	for (def prg : jsonProg) {
+		listeProgTriee.add(prg);
+	}
+
+	try {
+		def collateur = java.text.Collator.getInstance(java.util.Locale.FRENCH);
+		collateur.setStrength(java.text.Collator.SECONDARY); // ignore la casse
+
+		listeProgTriee.sort { a, b ->
+			def nomA = a['NomProg'] ? a['NomProg'].toString().trim() : '';
+			def nomB = b['NomProg'] ? b['NomProg'].toString().trim() : '';
+			return collateur.compare(nomA, nomB);
+		}
+
+	} catch (e) {
+		// Repli : en cas d'anomalie du referentiel, on conserve l'ordre
+		// d'origine plutot que de rendre la liste des programmes vide.
+		System.out.println("Tri des programmes : Exception " + e);
+	}
+
+	binding.setVariable("listeProgTriee", listeProgTriee);
+
+{{/groovy}}{{velocity}}
+	{{html clean="false"}}
+
+<!-- ==================================================================== -->
+<!-- Section: Racine du design system GOAL (jetons definis dans le SSX)    -->
+<!-- ==================================================================== -->
+<div class="ap-admin">
+
+	<!-- Section: En-tete de page -->
+	<header class="ap-header">
+		<span class="ap-header__accent" aria-hidden="true"></span>
+		<div class="ap-header__text">
+			<p class="ap-eyebrow">Referentiel GOAL</p>
+			<h1 class="ap-title">Gestion des utilisateurs</h1>
+			#if ($estAdmin)
+				<p class="ap-subtitle">Profils, perimetre programme et unites organisationnelles des comptes GOAL.</p>
+			#elseif ($estAutoPrg)
+				<p class="ap-subtitle">Consultez votre compte et ajustez vous-meme votre perimetre programme.</p>
+			#else
+				<p class="ap-subtitle">Consultation des informations de votre compte GOAL.</p>
+			#end
+		</div>
+	</header>
+
+	<!-- Section: Mise en page principale -->
+	<div class="ug-layout #if(!$estAdmin)ug-layout--single#end">
+
+		#if ($estAdmin)
+		<!-- Component: Liste des utilisateurs (administrateur) -->
+		<aside id="ListeUserContainer" class="ap-card ug-list">
+
+			<div class="ap-card__head">
+				<div>
+					<p class="ap-card__eyebrow">Comptes</p>
+					<h2 class="ap-card__title">$services.localization.render('USER_GOAL.FICHE.ListUser')</h2>
+				</div>
+				<button id="SpanGOAL_Modal_NewUSer" type="button" class="ap-btn ap-btn--primary" onclick="GOAL_GestUser_NouveauCompte()">
+					<img src="$imgAddUserURL" alt=""> $services.localization.render("USER_GOAL.Menu.nouveau")
+				</button>
+			</div>
+
+			<!-- Component: Barre d'outils (mise a jour du modele d'import) -->
+			<div class="ug-toolbar">
+				## Warning : aucun onclick ici. Le gestionnaire est branche par
+				## addEventListener dans UGOAL_FicheSpecifique.js : ajouter un onclick
+				## declencherait l'action deux fois.
+				<button id="GOAL_MajModeleImportGOAL" type="button" class="ap-btn ap-btn--ghost">
+					<span class="ug-spinner" aria-hidden="true"></span>
+					<img src="$imgExcelURL" alt="">
+					<span id="ug-majmodele-label">$services.localization.render('EcheancierGOAL.Menu.MajModeleImportGOAL')</span>
+				</button>
+			</div>
+
+			<!-- Component: Filtre de recherche -->
+			<div class="ug-search">
+				<div class="ap-field">
+					<label class="ap-field__label" for="Input_UserFilter">$services.localization.render('USER_GOAL.FICHE.UserFilter')</label>
+					<input id="Input_UserFilter" class="ap-input" type="text" value="$!{CurrentFilter}" placeholder="Login Nomeris">
+				</div>
+				<button id="GOALUser_applyfilter" type="button" class="ap-btn ap-btn--ghost">Rechercher</button>
+				## Reinitialisation du filtre : rendu visible d'emblee si un filtre
+				## est deja applique, sinon revele par le JavaScript des la saisie.
+				<button id="GOALUser_resetfilter" type="button" class="ap-iconbtn #if("$!{CurrentFilter}" == "")ug-is-hidden#end" title="Reinitialiser le filtre" aria-label="Reinitialiser le filtre">
+					<img src="$imgXURL" alt="">
+				</button>
+			</div>
+
+			<!-- Component: Tableau des utilisateurs -->
+			<div id="div_Liste_User" class="ug-tablewrap">
+				<table id="TableUser" class="ap-table ug-usertable">
+					<thead>
+						<tr>
+							<th scope="col" style="width:1%"></th>
+							<th scope="col">
+								Login
+								<button id="btnToggleSort" type="button" class="ug-sortbtn" onclick="toggleSort()" title="Inverser le tri" aria-label="Inverser le tri">
+									#if($sortOrder == 0)
+										<i class="fa fa-sort-alpha-asc" aria-hidden="true"></i>
+									#else
+										<i class="fa fa-sort-alpha-desc" aria-hidden="true"></i>
+									#end
+								</button>
+							</th>
+						</tr>
+					</thead>
+					<tbody>
+						#foreach($userGOAL in $listeTriee)
+							<tr id="TR_$!userGOAL[0]" class="ap-row">
+								<td class="ug-usertable__action">
+									<button id="TD_SEL_$!userGOAL[0]" type="button" class="ap-iconbtn" title="Editer" onclick="GOAL_GestUser_Edit('$!userGOAL[0]')">
+										<img src="$imgEditPencilURL" alt="Editer">
+									</button>
+								</td>
+								<td class="ug-usertable__login" title="$userGOAL[0]">$userGOAL[0]</td>
+							</tr>
+						#end
+					</tbody>
+				</table>
+			</div>
+
+		</aside>
+		#else
+			<!-- Elements conserves (masques) : contrats JS de la barre de filtre -->
+			<div id="ListeUserContainer" class="ug-is-hidden">
+				<input id="Input_UserFilter" type="text" value="$!{CurrentFilter}">
+				<span id="GOALUser_applyfilter"></span>
+			</div>
+		#end
+
+		<!-- Component: Fiche detaillee de l'utilisateur -->
+		<section id="DetailUserContainer" class="ap-card ug-detail #if($estAdmin)ug-is-hidden#end">
+
+			<div class="ap-card__head">
+				<div>
+					<p class="ap-card__eyebrow" id="ug-detail-eyebrow">Fiche utilisateur</p>
+					## Le titre porte l'identite (Prenom Nom), le login est rappele
+					## en dessous. Sans identite renseignee dans le compte XWiki,
+					## le titre reprend le login et cette ligne reste vide.
+					<h2 class="ap-card__title" id="ug-detail-title">Informations du compte</h2>
+					<p class="ug-detail__login" id="ug-detail-login"></p>
+				</div>
+				<div class="ug-actions">
+					## ------------------------------------------------------------------ ##
+					## Suppression : administrateur uniquement, masquee tant qu'aucun
+					## compte existant n'est charge (donc absente en mode creation).
+					## ------------------------------------------------------------------ ##
+					#if ($estAdmin)
+						<button id="GOAL_btn_SupprimerUser" type="button" class="ap-btn ap-btn--ghost-danger ug-is-hidden" onclick="GOAL_GestUser_DemanderSuppression()">
+							<span class="ug-spinner" aria-hidden="true"></span>
+							<span id="ug-delete-label">Supprimer</span>
+						</button>
+					#end
+
+					## ------------------------------------------------------------------ ##
+					## Enregistrement : rendu masque, revele par le JavaScript. Reste
+					## desactive tant qu'aucune modification n'a ete faite, puis se
+					## charge en rouge. Rendu inerte pour les profils en lecture seule.
+					## ------------------------------------------------------------------ ##
+					#if ($estModifiable)
+						<button id="span_saveUserGOAL" type="button" class="ap-btn ap-btn--save ug-is-hidden" onclick="GOAL_GestUser_EditSave()" disabled title="$services.localization.render('EcheancierGOAL.FICHE.SAVE')">
+							<img src="$imgFloppyURL" alt=""> <span id="ug-save-label">Enregistrer</span>
+						</button>
+					#else
+						<button id="span_saveUserGOAL" type="button" class="ap-btn ap-btn--save ug-is-hidden" disabled>
+							<img src="$imgFloppyURL" alt=""> <span id="ug-save-label">Enregistrer</span>
+						</button>
+					#end
+
+					<button id="span_closeEditUserGOAL" type="button" class="ap-iconbtn ug-is-hidden" title="$services.localization.render('EcheancierGOAL.FICHE.FERMER')">
+						<img src="$imgXURL" alt="Fermer">
+					</button>
+				</div>
+			</div>
+
+			<!-- Component: Message d'information du mode auto-service -->
+			#if ($estAutoPrg)
+				<div id="div_msg_info_autoservice_Prg" class="ug-alert ug-alert--info">
+					<span>$services.localization.render('USER_GOAL.FICHE.info_autoservice_Prg')</span>
+				</div>
+			#end
+
+			<!-- Component: Confirmation de suppression (en place, sans modale) -->
+			#if ($estAdmin)
+			<div id="ug-confirm-suppression" class="ug-confirm ug-is-hidden" role="alertdialog" aria-live="polite">
+				<div class="ug-confirm__text">
+					<strong>Supprimer le compte GOAL de <span id="ug-confirm-login"></span> ?</strong>
+					<span>Les droits GOAL et l'appartenance aux groupes seront retires. Le compte XWiki de la personne n'est pas supprime.</span>
+					<span class="ug-confirm__detail" id="ug-confirm-detail"></span>
+				</div>
+				<div class="ug-confirm__actions">
+					<button type="button" class="ap-btn ap-btn--ghost" onclick="GOAL_GestUser_AnnulerSuppression()">Annuler</button>
+					<button id="ug-confirm-valider" type="button" class="ap-btn ap-btn--danger" onclick="GOAL_GestUser_ConfirmerSuppression()">
+						<span class="ug-spinner" aria-hidden="true"></span>
+						<span id="ug-confirm-valider-label">Confirmer la suppression</span>
+					</button>
+				</div>
+			</div>
+			#end
+
+			<!-- Component: Identite -->
+			<div class="ug-section">
+				<p class="ug-section__title">Identite</p>
+				<div class="ug-grid">
+					<div class="ap-field">
+						<label class="ap-field__label" for="Input_Login_Update_User">$services.localization.render('USER_GOAL.FICHE.Login')</label>
+
+						## ------------------------------------------------------------ ##
+						## Deux controles pour un meme champ :
+						##  - en consultation / modification : champ texte verrouille
+						##  - en creation : selectize alimente par les comptes XWiki
+						## Le JavaScript n'en affiche qu'un seul a la fois.
+						## ------------------------------------------------------------ ##
+						<div id="ug-login-lecture">
+							<input id="Input_Login_Update_User" class="ap-input" type="text" disabled>
+						</div>
+
+						#if ($estAdmin)
+						<div id="ug-login-creation" class="ug-login-picker ug-is-hidden">
+							<select id="selectize-login-nomeris" name="Input_Login_NewUser" class="form-select" required></select>
+							<span id="help-block" class="help-block">Cet utilisateur a deja un compte dans GOAL</span>
+							<div id="selectize-loading" class="ug-login-loading">
+								<span class="ug-spinner" aria-hidden="true"></span> Verification du compte...
+							</div>
+						</div>
+						#end
+					</div>
+				</div>
+			</div>
+
+			<!-- Component: Profils et profil par defaut -->
+			<div class="ug-section #if(!$voitProfils)ug-is-hidden#end">
+				<p class="ug-section__title">$services.localization.render('USER_GOAL.FICHE.ListProfil')</p>
+
+				## Warning : ne PAS inserer d'espace entre <input> et <span>,
+				## le script de la liste des profils lit checkbox.nextSibling.textContent
+				<div id="div_Liste_Profil" class="ug-checklist">
+					<label class="ug-check"><input type="checkbox" id="$idProfilProgrammeID" name="$labelDroitProfilProgramme"><span>$labelProfilProgramme</span></label>
+					<label class="ug-check"><input type="checkbox" id="$idProfilMetierID" name="$labelDroitProfilMetier"><span>$labelProfilMetier</span></label>
+					<label class="ug-check"><input type="checkbox" id="$idProfilPilotageID" name="$labelDroitProfilPilotage"><span>$labelProfilPilotage</span></label>
+					<label class="ug-check"><input type="checkbox" id="$idProfilAdminID" name="$labelDroitProfilAdmin"><span>$labelProfilAdmin</span></label>
+					<label class="ug-check"><input type="checkbox" id="$idProfilAdminGicaID" name="$labelDroitProfilAdminGica"><span>$labelProfilAdminGica</span></label>
+					<label class="ug-check"><input type="checkbox" id="$idProfilAdminFonctID" name="$labelDroitProfilAdminFonct"><span>$labelProfilAdminFonct</span></label>
+				</div>
+
+				<div class="ug-grid" style="margin-top:14px">
+					<div class="ap-field">
+						<label class="ap-field__label" for="$elt_Select_ProfilParDefautUpdate">$services.localization.render('USER_GOAL.FICHE.ProfilParDefaut')</label>
+						<select id="$elt_Select_ProfilParDefautUpdate" name="$elt_Select_ProfilParDefautUpdate" class="ap-input"></select>
+					</div>
+					<div class="ap-field">
+						<label class="ap-field__label" for="$elt_Select_PdnParDefautUpdate">$services.localization.render('USER_GOAL.FICHE.TypePDnCreeParDefaut')</label>
+						<select id="$elt_Select_PdnParDefautUpdate" name="$elt_Select_PdnParDefautUpdate" class="ap-input">
+							#foreach($Elt in $ListeTypePDn.split(','))
+								<option value="$Elt">$Elt</option>
+							#end
+						</select>
+					</div>
+				</div>
+			</div>
+
+			<!-- Component: Perimetre programme -->
+			<div id="div_Liste_Programme" class="ug-section #if(!$voitProgramme)ug-is-hidden#end">
+				<p class="ug-section__title">$services.localization.render('USER_GOAL.FICHE.ListProgramme')</p>
+				<div class="ug-progwrap">
+					## ------------------------------------------------------------------ ##
+					## Le <table> est conserve : le JavaScript lit la valeur du programme
+					## via checkbox.closest('tr').cells[1] (contrat implicite).
+					## La mise en grille est purement CSS, l'API DOM .cells reste valide.
+					## ------------------------------------------------------------------ ##
+					<table id="TableProgramme" class="ug-progtable">
+						<tbody>
+							#foreach($prg in $listeProgTriee)
+								<tr id="TR_$!prg.NomProg" class="ug-progrow">
+									<td id="TD_SEL_$!prg.NomProg" class="ug-progrow__box"><input type="checkbox" id="Input_SEL_$!prg.NomProg" name="Input_SEL_$!prg.NomProg"></td>
+									## Le libelle est un <label for> : c'est lui qui rend toute la tuile
+									## cliquable, via un pseudo-element etale sur la ligne (cf. SSX).
+									<td class="ug-progrow__label"><label for="Input_SEL_$!prg.NomProg">$prg.NomProg</label></td>
+								</tr>
+							#end
+						</tbody>
+					</table>
+				</div>
+			</div>
+
+			<!-- Component: Unites organisationnelles -->
+			<div class="ug-section">
+				<p class="ug-section__title">$services.localization.render('USER_GOAL.FICHE.ListUO')</p>
+				<div class="ug-grid">
+					<div class="ap-field">
+						#if ($voitProfils)
+							<select id="Input_Liste_UO_Update_User" class="ap-input" multiple style="display:none"></select>
+						#else
+							<select id="Input_Liste_UO_Update_User" class="ap-input" multiple style="display:none" disabled></select>
+						#end
+					</div>
+				</div>
+			</div>
+
+		</section>
+
+		<!-- Component: Etat initial - aucun compte selectionne -->
+		#if ($estAdmin)
+		<div id="ug-empty-state" class="ap-card ug-empty">
+			<span class="ug-empty__icon"><img src="$imgPersonLineURL" alt=""></span>
+			<h2 class="ug-empty__title">Aucun utilisateur selectionne</h2>
+			<p class="ug-empty__text">
+				Choisissez un compte dans la liste pour consulter et modifier sa fiche,
+				ou creez un nouvel utilisateur.
+			</p>
+			<div class="ug-empty__actions">
+				<button type="button" class="ap-btn ap-btn--primary" onclick="GOAL_GestUser_NouveauCompte()">
+					<img src="$imgAddUserURL" alt=""> $services.localization.render("USER_GOAL.Menu.nouveau")
+				</button>
+			</div>
+		</div>
+		#end
+
+		<!-- Component: Etat vide / utilisateur inconnu -->
+		<div id="ErrorDetailUserContainer" class="ap-card ug-is-hidden">
+			<div class="ug-alert ug-alert--empty">
+				<span>$services.localization.render('USER_GOAL.FICHE.UserInconnu')</span>
+			</div>
+		</div>
+
+	</div>
+</div>
+
+<!-- ==================================================================== -->
+<!-- Section: Bouton de tri de la liste                                    -->
+<!-- ==================================================================== -->
 <script type="text/javascript">
-/**
- * @fileoverview Tri alphabétique des options du filtre rapide Programme
- *
- * Réordonne les <li> de la liste selon un tri français (insensible à la
- * casse et aux accents, avec gestion des suites numériques).
- * Le tri est appliqué une seule fois au chargement, sur le DOM déjà généré
- * par #TabSpeDisplayRapidefilter : aucune modification de la macro.
- */
-(function () {
-    'use strict';
-
-    /** Collateur français : accents et casse ignorés, tri numérique naturel */
-    const COLLATEUR = new Intl.Collator('fr', {
-        sensitivity: 'base',
-        numeric: true
-    });
-
-    /**
-     * @description Trie alphabétiquement les options d'une liste de filtre rapide
-     * @param {string} idListe - Identifiant du <ul> à trier
-     * @returns {void}
-     */
-    const trierOptionsFiltre = (idListe) => {
-        const ul = document.getElementById(idListe);
-        if (!ul) return;
-
-        const options = Array.from(ul.querySelectorAll(':scope > li'));
-        if (options.length < 2) return;
-
-        /**
-         * Libellé retenu pour la comparaison : texte visible de la ligne,
-         * à défaut la valeur portée par la case à cocher.
-         */
-        const libelle = (li) => {
-            const texte = li.textContent.trim();
-            if (texte !== '') return texte;
-            const cb = li.querySelector('input[type="checkbox"]');
-            return cb ? (cb.value || '') : '';
-        };
-
-        options
-            .sort((a, b) => COLLATEUR.compare(libelle(a), libelle(b)))
-            .forEach((li) => ul.appendChild(li));
-    };
-
-    const init = () => trierOptionsFiltre('RapidFilterMySelectOptionsULS_Programme');
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        init();
-    }
-})();
+	/**
+	 * @description Inverse l'ordre de tri de la liste des utilisateurs via l'URL.
+	 */
+	function toggleSort() {
+		let currentUrl = window.location.href;
+		currentUrl = currentUrl.replace(/[?&]sortOrder=[01]/g, '');
+		currentUrl = currentUrl.replace(/\\?$/g, '');
+		const separator = currentUrl.indexOf('?') !== -1 ? '&' : '?';
+		const newSortOrder = ($sortOrder == 0) ? 1 : 0;
+		window.location.href = currentUrl + separator + 'sortOrder=' + newSortOrder;
+	}
 </script>
-{{/html}}
-```
 
-## 4. Points d'attention
+<!-- ==================================================================== -->
+<!-- Section: Liste deroulante des profils par defaut                      -->
+<!-- Alimentee dynamiquement a partir des cases a cocher de profil         -->
+<!-- ==================================================================== -->
+<script type="text/javascript">
 
-- **Option « Tous » / valeur spéciale** : si la liste comporte une entrée générique en tête, elle serait déplacée par le tri. Il faut alors l'exclure du `sort` (par exemple via un attribut `data-fixe` sur le `<li>` ou en la sortant du tableau avant tri).
-- **Re-rendu dynamique** : si un champ de recherche filtre la liste en régénérant les `<li>`, l'ordre initial serait restauré. Dans ce cas, il faut soit rappeler `trierOptionsFiltre` après le filtrage, soit — de préférence — trier à la source (§2), ce qui rend le problème sans objet.
-- **Généralisation** : la fonction accepte un identifiant en paramètre, donc les autres filtres rapides (`S_UO_Pilote`, `S_TypeE`…) peuvent être triés par un simple appel supplémentaire.
-- **Cohérence PDE/PDA** : si le même défaut existe côté PDE, la correction à la source est mutualisable dans la macro commune.
+	/**
+	 * @description Synchronise la liste des profils par defaut avec les cases
+	 *              a cocher de profil cochees.
+	 */
+	function updateDefaultProfilUpdateUser() {
 
-Envoie-moi le code de `#TabSpeDisplayRapidefilter` et je te livre directement la version corrigée, avec le tri intégré au bon endroit plutôt qu'en post-traitement.
+		const eltSelectId = `$elt_Select_ProfilParDefautUpdate`;
+		const profileCheckboxes = document.querySelectorAll('#div_Liste_Profil input[type="checkbox"]');
+		const defaultProfileSelect = document.getElementById(eltSelectId);
+
+		if (!defaultProfileSelect) { return; }
+
+		function updateDefaultProfileList() {
+			defaultProfileSelect.innerHTML = '<option value="" selected> </option>';
+
+			profileCheckboxes.forEach(checkbox => {
+				const option = defaultProfileSelect.querySelector(`option[value="${checkbox.name}"]`);
+
+				if (checkbox.checked) {
+					if (!option) {
+						const newOption = document.createElement('option');
+						newOption.id = checkbox.id;
+						newOption.value = checkbox.name;
+						newOption.textContent = checkbox.nextSibling.textContent.trim();
+						defaultProfileSelect.appendChild(newOption);
+					}
+				} else if (option) {
+					defaultProfileSelect.removeChild(option);
+				}
+			});
+		}
+
+		profileCheckboxes.forEach(checkbox => {
+			checkbox.addEventListener('change', () => {
+				updateDefaultProfileList();
+				// Un seul profil coche : il devient le profil par defaut sans
+				// intervention. Defini dans UGOAL_FicheSpecifique.js.
+				if (typeof GOAL_AppliquerProfilParDefautUnique === 'function') {
+					GOAL_AppliquerProfilParDefautUnique();
+				}
+			});
+		});
+
+		updateDefaultProfileList();
+	}
+
+	document.addEventListener('DOMContentLoaded', function() {
+		updateDefaultProfilUpdateUser();
+	});
+
+</script>
+	{{/html}}
+{{/velocity}}
